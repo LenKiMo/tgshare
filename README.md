@@ -145,13 +145,13 @@ cp config.example.json config.json   # Windows: copy config.example.json config.
 ## ❓ 常见问题
 
 **Q：面板显示「离线」？**
-中继没起来：`curl http://127.0.0.1:8787/status`。另外请确认用户脚本版本 ≥ v1.0.3（改用 `GM_xmlhttpRequest` 的版本）——旧版用页面 `fetch` 会被浏览器拦。
+中继没起来：`curl http://127.0.0.1:8787/status`。若服务正常仍离线，检查 `config.json` 的 `port` 与脚本内 `EMBED.relay` 是否一致。
 
 **Q：为什么用 GM_xmlhttpRequest？**
 Chrome 142+ 启用了 Local Network Access（LNA）权限模型：https 页面直接 `fetch` 本机 `http://127.0.0.1` 会被以 `LocalNetworkAccessPermissionDenied` 拒绝，且**服务端响应头无法放行**。`GM_xmlhttpRequest` 由扩展上下文发起，天然豁免。
 
 **Q：X 页面变卡？**
-v1.0.3+ 的观察器只在新增推文时扫描，负载可忽略。若仍有大量 `ERR_BLOCKED_BY_CLIENT` 报错，通常是广告拦截器拦了 X 的 `viewer_context.json` 接口，与本项目无关。
+观察器只在新增推文时扫描，负载可忽略。若仍有大量 `ERR_BLOCKED_BY_CLIENT` 报错，通常是广告拦截器拦了 X 的 `viewer_context.json` 接口，与本项目无关。
 
 **Q：userbot 登录时提示风控/验证码？**
 建议使用自己的 `api_id/api_hash`（公用凭据容易触发风控）；`RECAPTCHA` 类拦截可稍后或换网络环境重试。
