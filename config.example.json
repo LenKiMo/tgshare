@@ -1,7 +1,7 @@
 {
   "_comment": "TGShare 中继配置示例。复制为 config.json 后编辑（config.json 已被 .gitignore 排除，不会入库）。",
   "_comment_mode": "mode(全局默认发送身份): userbot = 用自己的 Telegram 账号发送（需先 python server.py --login，推荐）; bot = Bot API token 发送（免登录，消息来自机器人）",
-  "_comment_api": "api_id/api_hash 在 https://my.telegram.org 申请（API development tools）",
+  "_comment_api": "api_id/api_hash 在 https://my.telegram.org → API development tools 申请。注意：申请时最好用家宽网络出口（数据中心/VPN IP 在表单阶段容易报 ERROR 被拒），详见 README FAQ",
   "mode": "userbot",
   "api_id": 0,
   "api_hash": "",

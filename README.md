@@ -163,8 +163,16 @@ Chrome 142+ 启用了 Local Network Access（LNA）权限模型：https 页面�
 **Q：X 页面变卡？**
 观察器只在新增推文时扫描，负载可忽略。若仍有大量 `ERR_BLOCKED_BY_CLIENT` 报错，通常是广告拦截器拦了 X 的 `viewer_context.json` 接口，与本项目无关。
 
-**Q：userbot 登录时提示风控/验证码？**
-建议使用自己的 `api_id/api_hash`（公用凭据容易触发风控）；`RECAPTCHA` 类拦截可稍后或换网络环境重试。
+**Q：userbot 模式需要 api_id/api_hash 吗？申请时一直报 ERROR？**
+userbot 模式需要自己的 `api_id/api_hash`——用仓库内置的公共凭据（Telegram for Android 教学默认值）能跑通，但**极易触发风控**，强烈建议自备。申请入口与步骤：
+
+1. 打开 **https://my.telegram.org**（入口：Telegram 官网 → 开发者 → API），用你的手机号登录（验证码发到 Telegram App）
+2. 进入 **API development tools**，随意填写 *App title* / *Short name* → **Create application**
+3. 拿到 `api_id`（数字）与 `api_hash`（字符串），填入 `config.json`（或 `config.example.json` 复制出的配置文件）
+
+> ⚠️ **申请时机很关键**：在 my.telegram.org 填完表单点提交时，如果直接返回 `ERROR`（而不是进入下一步），几乎都是因为当前出口 IP 是**数据中心 / VPN / 代理 IP**——Telegram 会在 API 申请表单阶段拒绝这类网络环境。请换**家宽网络**重试：断开 VPN/代理，或直接用**手机流量开热点**给电脑。申请成功后日常登录与使用不受出口网络限制。
+
+如果已有自己的凭据仍提示 `RECAPTCHA` 类风控/验证码，多为短时触发，等 1–3 分钟或换网络环境重试。
 
 **Q：可以换端口吗？**
 可以，改 `config.json` 的 `port`，同时把 `tgshare.user.js` 顶部 `EMBED.relay` 与安装页地址同步修改。
