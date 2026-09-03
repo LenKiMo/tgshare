@@ -1,6 +1,6 @@
 {
   "_comment": "TGShare 中继配置示例。复制为 config.json 后编辑（config.json 已被 .gitignore 排除，不会入库）。",
-  "_comment_mode": "mode: userbot = 用自己的 Telegram 账号发送（需先 python server.py --login，推荐）; bot = Bot API token 发送（免登录，消息来自机器人）",
+  "_comment_mode": "mode(全局默认发送身份): userbot = 用自己的 Telegram 账号发送（需先 python server.py --login，推荐）; bot = Bot API token 发送（免登录，消息来自机器人）",
   "_comment_api": "api_id/api_hash 在 https://my.telegram.org 申请（API development tools）",
   "mode": "userbot",
   "api_id": 0,
@@ -12,8 +12,12 @@
   "service": "fixupx",
   "fallback": "copy",
   "text_template": "{link}",
-  "_comment_targets": "targets: label=按钮文字, chat=@用户名 或 数字ID(群/频道为负数) 或 me(我的收藏/保存的消息)",
+  "_comment_bots": "bots: 多机器人注册表（token 只存在本机 config.json，不会下发到浏览器）。targets 里 \"bot\": \"别名\" 即用该机器人发送",
+  "bots": {},
+  "_comment_targets": "targets: label=按钮文字, chat=@用户名 或 数字ID(群/频道为负数) 或 me(我的收藏/保存的消息)。可选身份覆盖: mode(可选 userbot/bot) 与 bot(上面的注册表别名)；不写则用全局 mode。注意: 频道发消息需把该机器人设为频道管理员；普通群组拉入即可；me 需先给机器人发条消息",
   "targets": [
-    { "label": "我的收藏", "chat": "me" }
+    { "label": "我的收藏", "chat": "me" },
+    { "label": "自己的群", "chat": "@mygroup" },
+    { "label": "机器人代发频道", "chat": "@mychannel", "mode": "bot", "bot": "botA" }
   ]
 }

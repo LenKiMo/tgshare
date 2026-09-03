@@ -33,6 +33,7 @@
 - **两种发送通道**：
   - `userbot`（默认）：Telethon 以自己的 Telegram 账号发送，消息与你手动发的一模一样，可发给**任何**聊天（含机器人）
   - `bot`：Bot API token，免登录，消息来自机器人
+- **按目标选身份**：每个目标可单独指定发送者——有的目标用自己账号、有的用某个机器人；支持**多机器人注册表**（`bots`），互不干扰
 - **目标随时改**：`config.json` 里维护按钮与目标聊天，浏览器端点「刷新配置」即时生效；也可用内置的 `/pick` 页面从聊天列表挑选
 - **本地化域名面板**：悬浮面板内一键切换 fixupx/fixvx/fxtwitter/vxtwitter（持久化）
 - **原生外观**：悬浮按钮实时克隆 X 原生按钮的绘制参数（背景/边框/尺寸/图标），带 2 秒自愈防漂移；大图/弹窗查看时自动隐藏
@@ -102,21 +103,29 @@ cp config.example.json config.json   # Windows: copy config.example.json config.
 
 ```jsonc
 {
-  "mode": "userbot",            // userbot（自己账号）| bot（Bot API）
+  "mode": "userbot",            // 全局默认身份：userbot（自己账号）| bot（Bot API）
   "api_id": 12345678,           // my.telegram.org 申请
   "api_hash": "…",
-  "bot_token": "",              // mode=bot 时填写（@BotFather 创建）
+  "bot_token": "",              // mode=bot（未指定别名时）使用的 token，@BotFather 创建
   "port": 8787,                 // 中继端口（浏览器脚本默认匹配，改后需同步改 tgshare.user.js 顶部 EMBED.relay）
   "service": "fixupx",          // fixupx | fixvx | fxtwitter | vxtwitter（面板可切换）
   "fallback": "copy",           // 中继不可达时：copy=复制链接 | share=打开 t.me 分享
   "text_template": "{link}",    // 发送模板，可加前缀如 "📌 {link}"
+  "bots": {                     // 多机器人注册表（token 只存本机，不下发浏览器）
+    "botA": "123456:AA…",       //   别名 → token
+    "botB": "654321:BB…"
+  },
   "targets": [
-    { "label": "我的收藏", "chat": "me" },          // me = 我的收藏/保存的消息
-    { "label": "我的频道", "chat": "@mychannel" },  // @用户名
-    { "label": "某群",    "chat": -1001234567890 }  // 数字 ID（群/频道为负数）
+    { "label": "我的收藏", "chat": "me" },                       // me = 我的收藏/保存的消息
+    { "label": "自己的群", "chat": "@mygroup" },                 // 普通群组：userbot 或机器人成员均可发
+    { "label": "个人频道", "chat": "@mychannel" },               // 默认身份（全局 mode）发送
+    { "label": "机器人代发", "chat": -1001234567890,             // 数字 ID（群/频道为负数）
+      "mode": "bot", "bot": "botA" }                             //   该目标用 botA 身份发送
   ]
 }
 ```
+
+**身份规则**：目标的 `mode` / `bot` 字段覆盖全局 `mode`（写了 `bot` 别名即隐含 bot 模式）。发送权限提醒：**频道**里机器人必须是**管理员**才能发消息；**普通群组**机器人作为普通成员即可发言（除非群开启"仅管理员可发言"）；`chat: "me"` 需要你先给该机器人发一条消息（用于解析你的私聊 id）。
 
 > `auth_token` 留空会自动生成（浏览器脚本通过 `/config.js` 获取，用于 `/send` 鉴权）。
 > userbot 模式下可用 `http://127.0.0.1:8787/pick` 可视化挑选目标聊天。
@@ -139,6 +148,7 @@ cp config.example.json config.json   # Windows: copy config.example.json config.
 - CORS 仅放行 `https://x.com` 与 `https://twitter.com`
 - `/send` 与 `/dialogs` 需要 `X-Auth-Token` 头（令牌在 config.json，首次启动自动生成）
 - `/send` 的目标必须是 `targets` 白名单内 —— 即使令牌泄露，也只能发到你自己的预设聊天
+- 多机器人 token 只存在本机 `config.json` 的 `bots` 注册表，`/config.js` 不下发给浏览器（浏览器只拿到目标别名）
 - `tgshare.session`（Telethon 会话）等于账号钥匙：勿提交、勿外传、勿放云盘
 - 浏览器端必须用 `GM_xmlhttpRequest` 而非页面 `fetch`：新版 Chromium 的 Local Network Access 限制会拦截页面访问本机服务（详见 FAQ）
 

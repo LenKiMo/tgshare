@@ -38,6 +38,7 @@ DEFAULTS = {
     "service": "fixupx",
     "fallback": "copy",
     "text_template": "{link}",
+    "bots": {},
     "targets": [{"label": "保存的消息", "chat": "me"}],
 }
 
@@ -64,8 +65,9 @@ def load_config():
 def save_config(cfg):
     doc = {
         "_comment": "TGShare 中继配置。改完保存即可，浏览器端下次加载自动生效。",
-        "_comment_mode": "mode: userbot(自己账号, 需 --login) | bot(Bot API token, 免登录)",
-        "_comment_targets": "targets: label=按钮文字, chat=@用户名/数字ID(群/频道为负数)/me(保存的消息)。用 http://127.0.0.1:8787/pick 挑选",
+        "_comment_mode": "mode: userbot(自己账号, 需 --login) | bot(Bot API token, 免登录)；单个目标可用 mode/bot 覆盖身份",
+        "_comment_targets": "targets: label=按钮文字, chat=@用户名/数字ID(群/频道为负数)/me(保存的消息)。可加 mode(可选 userbot/bot) 与 bot(注册表别名) 覆盖发送身份。用 http://127.0.0.1:8787/pick 挑选",
+        "_comment_bots": "bots: 多机器人注册表，如 {\"botA\": \"123:token\", \"botB\": \"456:token\"}；targets 里 \"bot\": \"botA\" 即用该机器人发送",
         **cfg,
     }
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
@@ -142,9 +144,9 @@ async def resolve_bot_owner(app, token):
     raise RuntimeError("bot 模式找不到你的 chat id：先给机器人发一条消息，或直接用数字 chat id")
 
 
-async def send_bot(app, chat, text):
-    cfg = app["cfg"]
-    token = cfg.get("bot_token") or ""
+async def send_bot(app, chat, text, token=None):
+    if not token:
+        token = app["cfg"].get("bot_token") or ""
     if not token:
         raise RuntimeError("bot_token 未配置（mode=bot 需要）")
     if chat == "me":
@@ -165,11 +167,32 @@ def check_auth(request, cfg):
     return hmac.compare_digest(tok, cfg["auth_token"])
 
 
-def whitelisted(cfg, chat):
+def find_target(cfg, chat):
+    """按 chat 值找白名单目标（目标可携带身份覆盖字段）。"""
     for t in cfg.get("targets", []):
         if str(t.get("chat", "")) == str(chat):
-            return True
-    return False
+            return t
+    return None
+
+
+def resolve_sender(cfg, target):
+    """目标级身份覆盖：target.mode / target.bot 别名；缺省回退全局 mode。返回 (sender, bot_token|None)。"""
+    # 目标写了 bot 别名即隐含 bot 模式；否则 mode 字段覆盖，再回退全局 mode
+    if target.get("bot"):
+        mode = "bot"
+    else:
+        mode = (target.get("mode") or cfg.get("mode") or "userbot").lower()
+    if mode == "bot":
+        alias = target.get("bot")
+        if alias:
+            token = (cfg.get("bots") or {}).get(alias)
+            if not token:
+                raise RuntimeError(f'bots 注册表中不存在别名 "{alias}"，请检查 config.json 的 bots')
+            return "bot", token
+        return "bot", None
+    if mode not in ("userbot", "bot"):
+        raise RuntimeError(f'未知发送模式 "{mode}"（可选 userbot / bot）')
+    return mode, None
 
 
 # ---------------- handlers ----------------
@@ -186,19 +209,21 @@ async def handle_send(request):
     text = (data.get("text") or "").strip()
     if not chat or not text:
         return web.json_response({"ok": False, "error": "chat/text 必填"}, status=400)
-    if not whitelisted(cfg, chat):
+    if find_target(cfg, chat) is None:
         return web.json_response({"ok": False, "error": "该目标不在白名单，请先加入 config.json 的 targets"}, status=403)
     if len(text) > 4096:
         return web.json_response({"ok": False, "error": "text 过长"}, status=400)
     try:
-        if cfg["mode"] == "bot":
-            mid = await send_bot(request.app, chat, text)
+        target = find_target(cfg, chat)
+        sender, token = resolve_sender(cfg, target)
+        if sender == "bot":
+            mid = await send_bot(request.app, chat, text, token)
         else:
             mid = await send_userbot(request.app, chat, text)
     except Exception as e:
         logging.exception("send failed")
         return web.json_response({"ok": False, "error": str(e)[:300]}, status=500)
-    logging.info("sent to %s: %.80s", chat, text)
+    logging.info("sent to %s [%s]: %.80s", chat, sender, text)
     return web.json_response({"ok": True, "message_id": mid})
 
 
@@ -389,9 +414,14 @@ async def cors_mw(request, handler):
 async def on_startup(app):
     app["http"] = aiohttp.ClientSession()
     cfg = app["cfg"]
-    if cfg["mode"] == "userbot":
+    # 全局或任一目标需要 userbot 身份时，都建立 Telethon 会话
+    modes = {str(cfg.get("mode") or "userbot").lower()}
+    for t in cfg.get("targets", []):
+        if t.get("mode"):
+            modes.add(str(t["mode"]).lower())
+    if "userbot" in modes:
         await setup_telethon(app, cfg)
-    logging.info("TGShare 中继已启动: http://127.0.0.1:%s  mode=%s", cfg["port"], cfg["mode"])
+    logging.info("TGShare 中继已启动: http://127.0.0.1:%s  mode=%s", cfg["port"], cfg.get("mode"))
 
 
 async def on_cleanup(app):
