@@ -166,7 +166,7 @@ Chrome 142+ 启用了 Local Network Access（LNA）权限模型：https 页面�
 **Q：userbot 模式需要 api_id/api_hash 吗？申请时一直报 ERROR？**
 userbot 模式需要自己的 `api_id/api_hash`——用仓库内置的公共凭据（Telegram for Android 教学默认值）能跑通，但**极易触发风控**，强烈建议自备。申请入口与步骤：
 
-1. 打开 **https://my.telegram.org**（入口：Telegram 官网 → 开发者 → API），用你的手机号登录（验证码发到 Telegram App）
+1. 打开 https://my.telegram.org （入口：Telegram 官网 → 开发者 → API），用你的手机号登录（验证码发到 Telegram App）
 2. 进入 **API development tools**，随意填写 *App title* / *Short name* → **Create application**
 3. 拿到 `api_id`（数字）与 `api_hash`（字符串），填入 `config.json`（或 `config.example.json` 复制出的配置文件）
 
