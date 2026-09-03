@@ -1,0 +1,19 @@
+{
+  "_comment": "TGShare 中继配置示例。复制为 config.json 后编辑（config.json 已被 .gitignore 排除，不会入库）。",
+  "_comment_mode": "mode: userbot = 用自己的 Telegram 账号发送（需先 python server.py --login，推荐）; bot = Bot API token 发送（免登录，消息来自机器人）",
+  "_comment_api": "api_id/api_hash 在 https://my.telegram.org 申请（API development tools）",
+  "mode": "userbot",
+  "api_id": 0,
+  "api_hash": "",
+  "bot_token": "",
+  "session_name": "tgshare",
+  "port": 8787,
+  "auth_token": "",
+  "service": "fixupx",
+  "fallback": "copy",
+  "text_template": "{link}",
+  "_comment_targets": "targets: label=按钮文字, chat=@用户名 或 数字ID(群/频道为负数) 或 me(我的收藏/保存的消息)",
+  "targets": [
+    { "label": "我的收藏", "chat": "me" }
+  ]
+}
