@@ -106,11 +106,23 @@ def normalize_chat(chat):
 
 
 async def setup_telethon(app, cfg):
+    """建立 Telethon 会话（后台任务运行，带长重试以覆盖开机时网络未就绪）。"""
     from telethon import TelegramClient
 
     client = TelegramClient(str(BASE / cfg["session_name"]), int(cfg["api_id"]), cfg["api_hash"])
-    await client.connect()
     app["client"] = client
+    # 最长重试 ~2 分钟（6s × 20 次）：开机自启时网络/代理可能还没就绪
+    for i in range(20):
+        try:
+            await client.connect()
+            break
+        except Exception as e:
+            logging.warning("Telethon 连接失败(第 %d/20 次): %s", i + 1, e)
+            await asyncio.sleep(6)
+    if not client.is_connected():
+        app["authed"] = False
+        logging.error("Telethon 始终无法连接（网络/代理未就绪？）——将保持未登录，稍后重启或发送时自动重连")
+        return
     if await client.is_user_authorized():
         me = await client.get_me()
         app["authed"] = True
@@ -120,9 +132,25 @@ async def setup_telethon(app, cfg):
         logging.error("userbot 未登录！请运行: python server.py --login")
 
 
-async def send_userbot(app, chat, text):
+async def _ensure_client(app):
+    """确保 Telethon 客户端已连接；断线时尝试重连一次。返回 (client) 或抛错。"""
     client = app.get("client")
-    if client is None or not await client.is_user_authorized():
+    if client is None:
+        raise RuntimeError("userbot 未初始化（当前配置可能不需要 Telethon）")
+    if not client.is_connected():
+        logging.info("Telethon 断线，尝试重连…")
+        try:
+            await client.connect()
+        except Exception as e:
+            logging.warning("重连失败: %s", e)
+    if not client.is_connected():
+        raise RuntimeError("userbot 未连接（网络/代理问题），请稍后重试")
+    return client
+
+
+async def send_userbot(app, chat, text):
+    client = await _ensure_client(app)
+    if not await client.is_user_authorized():
         raise RuntimeError("userbot 未登录，请先运行 python server.py --login")
     msg = await client.send_message(normalize_chat(chat), text)
     return msg.id
@@ -420,7 +448,8 @@ async def on_startup(app):
         if t.get("mode"):
             modes.add(str(t["mode"]).lower())
     if "userbot" in modes:
-        await setup_telethon(app, cfg)
+        # 后台任务：HTTP 服务立即就绪，Telethon 在后台连接（含网络未就绪时的长重试）
+        asyncio.create_task(setup_telethon(app, cfg))
     logging.info("TGShare 中继已启动: http://127.0.0.1:%s  mode=%s", cfg["port"], cfg.get("mode"))
 
 
