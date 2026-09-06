@@ -13,8 +13,19 @@
 浏览器（Tampermonkey 油猴脚本）→ 本地中继(127.0.0.1:8787) → Telethon / Bot API → Telegram
 ```
 
+## 🖼️ 效果预览
+
+<p>
+  <img src="assets/screenshot-button.png" alt="推文操作栏中的 TGShare 分享按钮" width="47%"/>
+  <img src="assets/screenshot-menu.png" alt="点击 ✈ 后弹出的目标菜单" width="47%"/>
+</p>
+
+> 左：推文操作栏末端的 ✈ 按钮（克隆原生按钮，样式零违和）；右：点击后弹出的目标菜单。
+> 截图为演示配置（虚构聊天目标），实际目标在 `config.json` 中随时可改。
+
 ## 📑 目录
 
+- [🖼️ 效果预览](#️-效果预览)
 - [✨ 功能特性](#-功能特性)
 - [🧱 架构](#-架构)
 - [🚀 快速开始](#-快速开始)
