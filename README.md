@@ -188,6 +188,8 @@ userbot 模式需要自己的 `api_id/api_hash`——用仓库内置的公共凭
 **Q：可以换端口吗？**
 可以，改 `config.json` 的 `port`，同时把 `tgshare.user.js` 顶部 `EMBED.relay` 与安装页地址同步修改。
 
+> ⚠️ **Windows 换端口报 `PermissionError` / 绑定失败、但端口又没被占用？** 很可能是 **Hyper-V 保留端口区间**：Hyper-V / WSL2 / Docker Desktop 会动态保留一段 TCP 端口（本机常见 `8696–8795`），落在区间内的端口被系统内核拒绝绑定，`netstat` 也查不到占用进程。用 `netsh interface ipv4 show excludedportrange protocol=tcp` 可查看本机保留区间，换一个区间外的端口即可。
+
 ## 📁 项目结构
 
 ```
