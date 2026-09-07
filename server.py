@@ -85,8 +85,8 @@ def setup_logging():
         sh = logging.StreamHandler(sys.stderr)
         sh.setFormatter(fmt)
         root.addHandler(sh)
-    logging.getLogger("telethon").setLevel(logging.WARNING)
-    logging.getLogger("aiohttp").setLevel(logging.WARNING)
+    logging.getLogger("telethon").setLevel(logging.CRITICAL)
+    logging.getLogger("aiohttp").setLevel(logging.CRITICAL)
 
 
 # ---------------- telegram ----------------
