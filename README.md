@@ -102,6 +102,17 @@ cp config.example.json config.json   # Windows: copy config.example.json config.
 # 验证：curl http://127.0.0.1:8787/status  → {"ok":true,"mode":"userbot","authed":true,...}
 ```
 
+> 💡 **长期后台运行（推荐）：探活守护 `guard.py`**
+> 单跑 `server.py` 只在当前终端存活，睡眠/注销/崩溃后不会自动恢复。带一个 Windows 任务计划做探活守护即可：
+>
+> ```powershell
+> # 任务动作：pythonw.exe guard.py（工作目录 = tgshare 安装目录）
+> # 触发器建议：登录时 + 每 30 分钟重复 + 勾选"唤醒时运行"(WakeToRun)
+> # guard.py 每次触发检查 /status：健康立即退出(幂等)；无响应才拉起 server.py
+> ```
+>
+> 这样开机/登录、睡眠唤醒、任意崩溃都会被兜住（任务计划原生 RestartOnFailure 只认非零退出码，对"无声消失"无效，探活守护覆盖全部场景）。
+
 ### 2. 安装浏览器脚本
 
 浏览器打开 `http://127.0.0.1:8787/`（安装页）→ 点击「安装用户脚本」→ Tampermonkey 确认。
@@ -195,6 +206,7 @@ userbot 模式需要自己的 `api_id/api_hash`——用仓库内置的公共凭
 ```
 tgshare/
 ├── server.py            # 本地中继：aiohttp + Telethon / Bot API，/send /config.js /pick 等
+├── guard.py             # 探活守护：/status 无响应则拉起 server（配合任务计划做长期后台运行）
 ├── tgshare.user.js      # 油猴用户脚本（浏览器端全部逻辑）
 ├── login2.py            # 显式登录脚本（验证码 + 2FA 在本地终端输入）
 ├── config.example.json  # 配置模板（config.json 不入库）
