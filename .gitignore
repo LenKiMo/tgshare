@@ -10,6 +10,7 @@ tgshare.session
 tgshare.session-journal
 *.log
 pending_msg.txt
+tmp_media/
 
 # 系统/编辑器
 .DS_Store

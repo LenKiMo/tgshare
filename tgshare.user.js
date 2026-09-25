@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         TGShare – X 一键分享到 Telegram
 // @namespace    local.tgshare
-// @version      1.0.15
-// @description  推文操作栏新增分享按钮，一键把 fixupx/fixvx 链接发送到指定 Telegram 聊天（本机 tgshare 中继）
+// @version      1.2.0
+// @description  X 推文一键分享到 Telegram：仅链接 / 图片 / 原图相册（配文用原版链接）；悬浮按钮可拖动并记住位置
 // @match        https://x.com/*
 // @match        https://twitter.com/*
 // @run-at       document-idle
@@ -16,14 +16,18 @@
 
   // ---------- 兜底配置（会被本机中继 /config.js 覆盖） ----------
   var EMBED = {
-    relay: 'http://127.0.0.1:8787',
+    relay: 'http://127.0.0.1:17887',
     service: 'fixupx',        // fixupx | fixvx | fxtwitter | vxtwitter
     fallback: 'copy',         // 中继不可用时: copy=复制链接 share=打开 t.me 分享 none=不处理
     textTemplate: '{link}',
+    shareMode: 'link',        // link=只发链接 | photo=发首图 | album=发原图相册 | mosaic=多图拼一张
+    officialDomain: '',       // 媒体模式强制官方域（空=保留原链接）
     targets: [{ label: '我的收藏', chat: 'me' }],
     authToken: ''
   };
-  var CFG = { relay: EMBED.relay, service: EMBED.service, fallback: EMBED.fallback, textTemplate: EMBED.textTemplate, targets: EMBED.targets.slice(), authToken: EMBED.authToken };
+  var CFG = { relay: EMBED.relay, service: EMBED.service, fallback: EMBED.fallback, textTemplate: EMBED.textTemplate, shareMode: EMBED.shareMode, officialDomain: EMBED.officialDomain, targets: EMBED.targets.slice(), authToken: EMBED.authToken };
+  var SHARE_MODES = ['link', 'photo', 'album', 'mosaic'];
+  var SHARE_LABELS = { link: '仅链接', photo: '图片', album: '相册', mosaic: '拼图' };
 
   // 幂等：油猴(隔离世界) 与 书签(页面世界) 共享 DOM，用根元素标记防止重复注入
   if (document.documentElement && document.documentElement.getAttribute('data-tgshare-loaded')) return;
@@ -136,16 +140,104 @@
   function currentLink() {
     var m = location.pathname.match(/\/status\/(\d+)/);
     if (m) return location.origin + location.pathname.split('?')[0];
+    var a = currentArticle();
+    if (a) return tweetLink(a);
+    return null;
+  }
+
+  function currentArticle() {
     var mid = innerHeight / 2;
     var arts = $$('article[data-testid="tweet"]').filter(function (a) {
       var r = a.getBoundingClientRect();
       return r.top < mid && r.bottom > mid;
     });
-    for (var i = 0; i < arts.length; i++) {
-      var l = tweetLink(arts[i]);
-      if (l) return l;
-    }
+    for (var i = 0; i < arts.length; i++) if (tweetLink(arts[i])) return arts[i];
     return null;
+  }
+
+  // ---------- 媒体提取（浏览器已登录 X，直接从页面 DOM 取图，不依赖外部服务） ----------
+  // 原图：页面里的缩略图 URL 把 name=small 改成 name=orig
+  function origUrl(u) {
+    if (/[?&]name=/.test(u)) return u.replace(/([?&]name=)\w+/, '$1orig');
+    return u;
+  }
+
+  // 引用推文（quote）内部有自己的时间戳链接 —— 用它把嵌套推文里的图排除掉
+  function nestedIn(node, root) {
+    var p = node.parentElement;
+    while (p && p !== root) {
+      if (p.querySelector('a[href*="/status/"] time')) return true;
+      p = p.parentElement;
+    }
+    return false;
+  }
+
+  function mediaOf(article) {
+    var out = { photos: [], video: null, poster: null };
+    if (!article) return out;
+    var link = tweetLink(article) || '';
+    var sid = (String(link).match(/\/status\/(\d+)/) || [])[1] || '';
+    var seen = {};
+
+    // ① 权威来源：媒体链接自带 /status/<主推文id>/photo/N —— 引用推文（别的 id）自动被排除
+    var byIdx = {};
+    $$('a[href*="/photo/"]', article).forEach(function (a) {
+      var mm = (a.getAttribute('href') || '').match(/\/status\/(\d+)\/photo\/(\d+)/);
+      if (!mm) return;
+      if (sid && mm[1] !== sid) return;                  // 属于别的推文（引用/转推）→ 跳过
+      var img = a.querySelector('img[src*="pbs.twimg.com/"]');
+      var src = img && (img.currentSrc || img.getAttribute('src'));
+      if (!src) return;
+      var key = src.replace(/\?.*$/, '');
+      if (seen[key]) return;
+      seen[key] = 1;
+      byIdx[Number(mm[2])] = origUrl(src);               // 原图交给中继重整（会把 webp 换成 jpg 原图）
+    });
+    Object.keys(byIdx).sort(function (x, y) { return x - y; }).forEach(function (k) {
+      out.photos.push(byIdx[k]);
+    });
+
+    // ② 兜底（没有 photo 链接的渲染变体）：扫 pbs 图，靠「嵌套推文自带时间戳链接」排除引用
+    var havePhotos = out.photos.length > 0;
+    $$('img[src*="pbs.twimg.com/"]', article).forEach(function (img) {
+      var src = img.currentSrc || img.getAttribute('src') || '';
+      if (!/pbs\.twimg\.com\/(media|amplify_video_thumb|ext_tw_video_thumb|tweet_video_thumb)\//.test(src)) return;
+      if (nestedIn(img, article)) return;
+      var key = src.replace(/\?.*$/, '');
+      if (/\/media\//.test(src)) {
+        if (!havePhotos && !seen[key]) { seen[key] = 1; out.photos.push(origUrl(src)); }
+      } else if (!out.poster) {
+        out.poster = origUrl(src);                       // 视频封面（兜底用）
+      }
+    });
+
+    // ③ 视频直链（X 多为 blob:，拿不到就让中继走 fxtwitter API）
+    $$('video', article).forEach(function (v) {
+      if (out.video || nestedIn(v, article)) return;
+      var s = v.currentSrc || v.getAttribute('src') || '';
+      if (!s) { var sc = v.querySelector('source'); s = (sc && sc.getAttribute('src')) || ''; }
+      if (/^https?:\/\/\S+\.mp4/.test(s) || /^https?:\/\/video\.twimg\.com\//.test(s)) out.video = s;
+    });
+
+    if (out.photos.length > 10) out.photos = out.photos.slice(0, 10);
+    return out;
+  }
+
+  // 推文正文（媒体模式当配文用）；引用推文自己的正文要排除
+  function tweetTextOf(article) {
+    if (!article) return '';
+    var els = $$('div[data-testid="tweetText"]', article).filter(function (e) {
+      return !nestedIn(e, article);
+    });
+    return els.length ? (els[0].innerText || '').trim() : '';
+  }
+
+  // 分享用的链接：仅链接模式转镜像域；媒体模式保留原版（可选强制官方域）
+  function linkForShare(link) {
+    if (CFG.shareMode === 'link') return convert(link);
+    var m = (link || '').match(/^https?:\/\/(?:www\.)?([^\/]+)\/(.*)$/);
+    if (m && CFG.officialDomain) return 'https://' + CFG.officialDomain + '/' + m[2];
+    return link;
   }
 
   // ---------- 配置 ----------
@@ -159,6 +251,8 @@
         if (c.service) CFG.service = c.service;
         if (c.fallback) CFG.fallback = c.fallback;
         if (c.textTemplate) CFG.textTemplate = c.textTemplate;
+        if (c.shareMode) CFG.shareMode = c.shareMode;
+        if (typeof c.officialDomain === 'string') CFG.officialDomain = c.officialDomain;
         if (c.authToken) CFG.authToken = c.authToken;
         if (c.relay) CFG.relay = c.relay;
         if (cb) cb(true);
@@ -173,20 +267,30 @@
 
   function doFallback(link) {
     var f = CFG.fallback || 'copy';
-    if (f === 'copy') { copyText(link); toast('⚠ 中继不可达，已复制链接'); }
-    else if (f === 'share') { window.open('https://t.me/share/url?url=' + encodeURIComponent(link), '_blank'); toast('已打开分享窗口'); }
+    var shown = linkForShare(link);
+    if (f === 'copy') { copyText(shown); toast('⚠ 中继不可达，已复制链接'); }
+    else if (f === 'share') { window.open('https://t.me/share/url?url=' + encodeURIComponent(shown), '_blank'); toast('已打开分享窗口'); }
   }
 
-  function sendTo(chat, label, link) {
-    link = convert(link);  // x.com/twitter.com → fixupx/fixvx 等
-    var text = buildText(link);
-    toast('发送中 → ' + label);
-    httpReq('POST', CFG.relay + '/send', { chat: chat, text: text }, 8000)
+  // 发送：link=原版链接（服务端按 share_mode 决定发链接还是发图），media/tweet_text=页面里抓到的图与正文
+  function sendTo(chat, label, link, media, tweetText) {
+    var payload = { chat: chat, link: link };
+    if (media) payload.media = media;
+    if (CFG.shareMode !== 'link' && tweetText) payload.tweet_text = tweetText;
+    // 兼容旧中继：仅链接模式同时带上拼好的文本（新中继会忽略它自行按 share_mode 处理）
+    if (CFG.shareMode === 'link') payload.text = buildText(convert(link));
+    var modeName = SHARE_LABELS[CFG.shareMode] || CFG.shareMode;
+    toast('发送中 → ' + label + (CFG.shareMode === 'link' ? '' : '·' + modeName));
+    httpReq('POST', CFG.relay + '/send', payload, 180000)
       .then(function (r) {
         var j = {};
         try { j = JSON.parse(r.text || ''); } catch (e) {}
-        if (r.status >= 200 && r.status < 300 && j.ok) toast('✓ 已发送到 ' + label);
-        else toast('✗ 发送失败：' + (j.error || r.status));
+        if (r.status >= 200 && r.status < 300 && j.ok) {
+          var what = j.kind === 'album' ? ('相册 ' + j.count + ' 张') :
+                     j.kind === 'photo' ? '图片' : j.kind === 'video' ? '视频' : '链接';
+          var note = (j.kind === 'link' && j.media_error && CFG.shareMode !== 'link') ? '（媒体失败，已发链接）' : '';
+          toast('✓ 已发送' + what + '到 ' + label + note);
+        } else toast('✗ 发送失败：' + (j.error || r.status));
       })
       .catch(function () { doFallback(link); });
   }
@@ -194,7 +298,17 @@
   function shareArticle(article) {
     var l = tweetLink(article) || currentLink();
     if (!l) { toast('✗ 未找到推文链接'); return null; }
-    return l;
+    if (CFG.shareMode === 'link') return { link: l, media: null, text: '' };
+    return { link: l, media: mediaOf(article), text: tweetTextOf(article) };
+  }
+
+  // 悬浮面板用：视口中央那条推文的链接 + 媒体
+  function currentShare() {
+    var l = currentLink();
+    if (!l) { toast('✗ 找不到当前推文'); return null; }
+    var a = currentArticle();
+    if (CFG.shareMode === 'link' || !a) return { link: l, media: null, text: '' };
+    return { link: l, media: mediaOf(a), text: tweetTextOf(a) };
   }
 
   // ---------- 菜单 ----------
@@ -225,28 +339,29 @@
     menu.appendChild(lbl);
     CFG.targets.forEach(function (t) {
       menu.appendChild(menuItem(t.label || t.chat, '📮', function () {
-        var l = shareArticle(article);
-        if (l) sendTo(t.chat, t.label || t.chat, l);
+        var s = shareArticle(article);
+        if (s) sendTo(t.chat, t.label || t.chat, s.link, s.media, s.text);
       }));
     });
     if (CFG.targets.length > 1) {
       menu.appendChild(document.createElement('div')).className = 'sep';
       menu.appendChild(menuItem('发送到全部 (' + CFG.targets.length + ')', '📤', function () {
-        var l = shareArticle(article);
-        if (!l) return;
+        var s = shareArticle(article);
+        if (!s) return;
         CFG.targets.forEach(function (t, i) {
-          setTimeout(function () { sendTo(t.chat, t.label || t.chat, l); }, i * 900);
+          setTimeout(function () { sendTo(t.chat, t.label || t.chat, s.link, s.media, s.text); },
+                     i * (CFG.shareMode === 'link' ? 900 : 1500));
         });
       }));
     }
     var sep = document.createElement('div'); sep.className = 'sep'; menu.appendChild(sep);
-    menu.appendChild(menuItem('复制转换后链接', '🔗', function () {
+    menu.appendChild(menuItem('复制分享链接', '🔗', function () {
       var l = shareArticle(article);
-      if (l) { copyText(convert(l)); toast('✓ 已复制 ' + CFG.service + ' 链接'); }
+      if (l) { copyText(linkForShare(l.link)); toast('✓ 已复制 ' + (CFG.shareMode === 'link' ? CFG.service : '原版') + ' 链接'); }
     }));
     menu.appendChild(menuItem('t.me 分享对话框', '🌐', function () {
       var l = shareArticle(article);
-      if (l) window.open('https://t.me/share/url?url=' + encodeURIComponent(convert(l)), '_blank');
+      if (l) window.open('https://t.me/share/url?url=' + encodeURIComponent(linkForShare(l.link)), '_blank');
     }));
     menu.appendChild(menuItem('刷新配置', '🔄', function () {
       toast('配置刷新中…');
@@ -273,9 +388,18 @@
   var DIALOG_SEL = '[role="dialog"],[data-testid="photo-viewer"]';
 
   function hasDialog() {
-    var d = document.querySelector(DIALOG_SEL);
-    // 仅当弹窗真实可见（有尺寸）时才视为打开，避免隐藏的常驻 dialog 误隐藏按钮
-    return !!(d && d.getBoundingClientRect().width > 0);
+    var ds = $$(DIALOG_SEL);
+    for (var i = 0; i < ds.length; i++) {
+      var r = ds[i].getBoundingClientRect();
+      // 仅当弹窗真实可见且「够大」时才视为打开（大图/视频查看器等全屏模态框）。
+      // 曾经只判 width>0：X 上任何常驻可见的小 dialog 都会让悬浮按钮被永久 display:none。
+      if (r.width > 0 && r.height > 0 &&
+          r.width >= Math.min(600, innerWidth * 0.5) && r.height >= innerHeight * 0.5) {
+        hasDialog.last = ds[i];
+        return true;
+      }
+    }
+    return false;
   }
 
   // 弹窗隐藏/显示由 buildPanel 赋值实现（供 init 的观察器调用）
@@ -288,10 +412,14 @@
     $$(TWEET_SEL).forEach(function (article) {
       try {
         if (article.querySelector('[data-tgshare]')) return;
+        // 必须是「真推文」：有状态永久链接（带时间戳）或推文正文 testid。
+        // 否则 X 的「推荐关注」等用户卡片容器也会被注入一个裸飞机图标 —— 错位来源之一。
+        if (!$('a[href*="/status/"] time', article) && !$('div[data-testid="tweetText"]', article)) return;
         var groups = $$('div[role="group"]', article);
+        // 只认真正的操作栏（含 回复/转推/点赞/收藏 任一）；找不到就不注入——宁缺，不错位
         var group = groups.filter(function (g) {
           return $('[data-testid="reply"],[data-testid="retweet"],[data-testid="like"],[data-testid="bookmark"]', g);
-        })[0] || groups[groups.length - 1];
+        })[0];
         if (!group) return;
         // 取最后一个含 role=button 的可见动作 wrapper（分享/收藏等，随 X 版本自适应）
         var share = null;
@@ -328,25 +456,115 @@
     fab.title = 'TGShare';
     fab.style.visibility = 'hidden';   // 首次对齐前不显示，避免小图标闪烁
     fabEl = fab;
-    fab.addEventListener('click', function (e) { e.stopPropagation(); togglePanel(); });
+    fab.addEventListener('click', function (e) {
+      e.stopPropagation();
+      if (fab.dataset.dragged === '1') return;   // 刚拖动过：不当作点击
+      togglePanel();
+    });
+    // 拖动微调 + localStorage 记忆：启发式万一还是不合意，用户拖一下就永久生效（面板里可重置）
+    var drag = null;
+    fab.addEventListener('pointerdown', function (e) {
+      if (e.button !== 0) return;
+      drag = { x: e.clientX, y: e.clientY,
+               right: parseFloat(fab.style.right) || 16, bottom: parseFloat(fab.style.bottom) || 96,
+               moved: false };
+      try { fab.setPointerCapture(e.pointerId); } catch (e2) {}
+    });
+    fab.addEventListener('pointermove', function (e) {
+      if (!drag) return;
+      var dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+      if (!drag.moved && (Math.abs(dx) + Math.abs(dy)) < 5) return;   // 5px 死区，避免误拖
+      drag.moved = true;
+      fab.style.right = Math.max(0, Math.min(innerWidth - 40, drag.right - dx)) + 'px';
+      fab.style.bottom = Math.max(0, Math.min(innerHeight - 40, drag.bottom - dy)) + 'px';
+      e.preventDefault();
+    });
+    function endDrag() {
+      if (!drag) return;
+      var moved = drag.moved;
+      drag = null;
+      if (!moved) return;
+      savePos(parseFloat(fab.style.right), parseFloat(fab.style.bottom));
+      fab.dataset.dragged = '1';
+      setTimeout(function () { fab.dataset.dragged = ''; }, 400);
+      toast('✓ 位置已记住（面板里可「重置悬浮按钮位置」）');
+    }
+    fab.addEventListener('pointerup', endDrag);
+    fab.addEventListener('pointercancel', endDrag);
     document.body.appendChild(fab);
 
     // 定位：注入 X 原生悬浮按钮容器，让 X 的布局引擎接管间距/对齐；样式实时克隆原生按钮
-    function findNativeBtns() {
-      var out = [];
-      var cands = document.querySelectorAll('[data-testid="BackToTopButton"],[aria-label="回到顶部"],[aria-label="Back to top"],[aria-label="Grok"],[data-testid="Grok"]');
-      for (var i = 0; i < cands.length; i++) {
-        var r = cands[i].getBoundingClientRect();
-        // 只认右下角固定悬浮区（避免匹配到推文内的分享按钮）
-        if (r.width > 0 && r.left > innerWidth * 0.6 && r.top > innerHeight * 0.5) out.push({ el: cands[i], r: r });
+    // 悬浮判定：自身或任一祖先为 fixed/sticky。X 的悬浮按钮自身常是 static，
+    // 真正的悬浮来自外层容器——只看自身 position:fixed 会漏掉它（结果悬浮按钮退到兜底位、看着像没对齐）。
+    function isFloating(el) {
+      var p = el;
+      while (p && p !== document.body && p !== document.documentElement) {
+        var ps;
+        try { ps = getComputedStyle(p).position; } catch (e) { break; }
+        if (ps === 'fixed' || ps === 'sticky') return true;
+        p = p.parentElement;
       }
-      out.sort(function (a, b) { return a.r.top - b.r.top; });
-      return out;
+      return false;
+    }
+    function isControl(el) {
+      if (!el || el.nodeType !== 1) return false;
+      if (!(el.matches('button,[role="button"],a[href],[tabindex]') || el.querySelector('svg, img'))) return false;
+      return isFloating(el);   // 必须真的悬浮（自身或祖先 fixed/sticky），排除正文里的按钮
+    }
+    // 右下角「看得见的悬浮控件」——用命中测试（elementsFromPoint）取，天然排除透明空壳/被遮挡的东西。
+    // 教训：X 的 DOM 里有大量透明占位容器（如 400×55 的 GrokDrawer，DOM 在、视觉不在），
+    // 拿它们当锚点会把悬浮按钮放到看不见的容器上方，与用户看得见的按钮隔开一大截 = 错位。
+    function hitControl(x, y) {
+      var els = document.elementsFromPoint(x, y) || [];
+      for (var j = 0; j < els.length; j++) {
+        var e = els[j];
+        if (e.closest && e.closest('.tgshare-fab,.tgshare-card,[data-tgshare]')) continue;   // 别认自己
+        if (!isControl(e)) continue;
+        var r = e.getBoundingClientRect();
+        if (r.width < 20 || r.height < 20 || r.width > 120 || r.height > 120) continue;
+        if (r.left <= innerWidth * 0.6 || r.top <= innerHeight * 0.45) continue;
+        return { el: e, r: r };
+      }
+      return null;
+    }
+    // 右下角「看得见的悬浮控件」——用命中测试（elementsFromPoint）在右下角区块里扫描取，
+    // 天然排除透明空壳/被遮挡的东西。
+    // 教训：X 的 DOM 里有大量透明占位容器（如 400×55 的 GrokDrawer，DOM 在、视觉不在），拿它们当锚点会把
+    // 悬浮按钮放到看不见的容器上方，与用户看得见的按钮隔开一大截 = 错位；
+    // 另外**不要写死采样位置**——X 的悬浮列在「距右边约 35px」处，写 W-20/W-34 会正好擦着它的右边缘过去，一个都采不到。
+    var stackCache = null, stackCacheAt = 0;
+    function visibleStack() {
+      var now = Date.now();
+      if (stackCache && now - stackCacheAt < 900) return stackCache;   // 节流：滚动时最多 ~1 次/秒
+      var hits = [], seen = [];
+      var yStop = Math.max(innerHeight - 280, innerHeight * 0.45);
+      for (var y = innerHeight - 6; y > yStop; y -= 12) {
+        for (var x = innerWidth - 6; x > innerWidth - 140 && x > innerWidth * 0.6; x -= 8) {
+          var h = hitControl(x, y);
+          if (!h || seen.indexOf(h.el) >= 0) continue;
+          seen.push(h.el);
+          hits.push(h);
+        }
+      }
+      hits.sort(function (a, b) { return a.r.top - b.r.top; });   // 最靠上的排前面（悬浮列顶部）
+      stackCache = hits;
+      stackCacheAt = now;
+      return hits;
     }
     function cloneBtnStyle(ref) {
       try {
+        var rr = ref.getBoundingClientRect();
+        // 参照物若是「宽容器」（如 Grok 抽屉 400×55）：只当锚点，不抄它的尺寸/底色
+        if (rr.width > 160 || rr.height > 160) return;
         var cs = getComputedStyle(ref);
-        ['background-color', 'border', 'border-radius', 'box-shadow', 'width', 'height', 'color', 'box-sizing'].forEach(function (p) {
+        var bg = cs.getPropertyValue('background-color');
+        var transparent = !bg || bg === 'transparent' || /rgba\(0,\s*0,\s*0,\s*0\)/.test(bg);
+        // 参照物若是「透明裸图标」（X 的静态按钮），别把透明背景/无边框抄过来——
+        // 否则悬浮按钮会变成没有底衬的裸图标，看着就像错位
+        var props = transparent
+          ? ['border-radius', 'width', 'height', 'color', 'box-sizing']
+          : ['background-color', 'border', 'border-radius', 'box-shadow', 'width', 'height', 'color', 'box-sizing'];
+        props.forEach(function (p) {
           var v = cs.getPropertyValue(p);
           if (v && v !== 'none') fab.style[p] = v;
         });
@@ -362,43 +580,84 @@
         }
       } catch (e) {}
     }
-    var lastGoodPos = null;   // 最近一次成功对齐的位置，避免原生按钮短暂消失时跳位
-    function placeFab() {
-      var btns = findNativeBtns();
-      if (!btns.length) {
-        if (lastGoodPos) { fab.style.bottom = lastGoodPos.bottom; fab.style.right = lastGoodPos.right; }
-        else { fab.style.bottom = '96px'; fab.style.right = '16px'; }
+    var lastGoodPos = null;   // 最近一次成功对齐的位置
+    var lastRefEl = null;     // 上一次的对齐参照（仅用于换参照时打一条日志）
+    function posSane(p) {     // 旧位置只有在「右下角区域」内才允许复用，避免页面中间的错位卡死
+      if (!p) return false;
+      var b = parseFloat(p.bottom), r = parseFloat(p.right);
+      return b >= 0 && b <= 400 && r >= 0 && r <= 240;
+    }
+    // 用户手动拖过的位置优先（localStorage 记忆）——启发式万一还是不合意，拖一下即可，彻底摆脱 DOM 猜测
+    function savedPos() {
+      try {
+        var j = JSON.parse(localStorage.getItem('tgshare.fabPos') || 'null');
+        return (j && typeof j.right === 'number' && typeof j.bottom === 'number') ? j : null;
+      } catch (e) { return null; }
+    }
+    function savePos(right, bottom) {
+      try { localStorage.setItem('tgshare.fabPos', JSON.stringify({ right: right, bottom: bottom })); } catch (e) {}
+    }
+    function clearSavedPos() { try { localStorage.removeItem('tgshare.fabPos'); } catch (e) {} }
+
+    function placeFab(force) {
+      var sp = savedPos();
+      if (sp && !force) {                       // 用户定过位置：不动
+        fab.style.right = sp.right + 'px';
+        fab.style.bottom = sp.bottom + 'px';
+        if (fab.style.visibility === 'hidden') fab.style.visibility = 'visible';
         return;
       }
-      var ref = btns[0].el, r = btns[0].r;
-      cloneBtnStyle(ref);
-      var gap = 12;
-      if (btns.length > 1) {
-        var g = btns[1].r.top - btns[0].r.bottom;
-        if (g > 0 && g < 80) gap = g;
+      var hits = visibleStack();
+      if (hits.length) {
+        var anchor = hits[0], r = anchor.r;     // 悬浮列最靠上的可见控件 → 站在它上方
+        var rightEdge = Math.max.apply(null, hits.map(function (h) { return h.r.right; }));   // 列的右边缘
+        var gap = 12;
+        if (hits.length > 1) { var g = hits[1].r.top - hits[0].r.bottom; if (g >= 4 && g <= 40) gap = g; }
+        if (anchor.el !== lastRefEl) {
+          lastRefEl = anchor.el;
+          try {
+            console.log('[TGShare] 对齐参照(可见控件): ' +
+              (anchor.el.getAttribute('aria-label') || anchor.el.getAttribute('data-testid') || anchor.el.tagName) +
+              ' ' + JSON.stringify({ l: Math.round(r.left), t: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }) +
+              ' 同列可见项=' + hits.length);
+          } catch (e1) {}
+        }
+        if (r.width <= 160 && r.height <= 160) cloneBtnStyle(anchor.el);   // 只从按钮大小的可见控件抄样式
+        fab.style.bottom = Math.max(14, innerHeight - r.top + gap) + 'px';
+        fab.style.right = Math.max(14, innerWidth - rightEdge) + 'px';
+        // 收敛校验：右边缘对齐 + 底边 = 参照顶边 - 间距
+        for (var k = 0; k < 3; k++) {
+          var fr = fab.getBoundingClientRect();
+          var dx = rightEdge - fr.right;
+          var dy = (r.top - gap) - fr.bottom;
+          if (Math.abs(dx) <= 0.5 && Math.abs(dy) <= 0.5) break;
+          fab.style.right = (parseFloat(fab.style.right) - dx) + 'px';
+          fab.style.bottom = (parseFloat(fab.style.bottom) - dy) + 'px';
+        }
+        fab.style.visibility = 'visible';
+        lastGoodPos = { bottom: fab.style.bottom, right: fab.style.right };
+        try {
+          console.log('[TGShare] 可见悬浮列 ' + hits.length + ' 项 [' + hits.map(function (h) {
+            return (h.el.getAttribute('aria-label') || h.el.getAttribute('data-testid') || h.el.tagName) + '@' + Math.round(h.r.top);
+          }).join(' ') + '] gap=' + gap + ' → bottom=' + fab.style.bottom + ' right=' + fab.style.right);
+        } catch (e5) {}
+        return;
       }
-      var w = fab.offsetWidth || r.width || 40;
-      fab.style.bottom = Math.max(14, innerHeight - r.top + gap) + 'px';
-      fab.style.right = Math.max(14, innerWidth - (r.left + r.width / 2 + w / 2)) + 'px';
-      // 收敛校验（比较底边与中心，方向正确）：漂移时自愈，不漂移则零开销跳过
-      for (var k = 0; k < 3; k++) {
-        var fr = fab.getBoundingClientRect();
-        var dx = (r.left + r.width / 2) - (fr.left + fr.width / 2);
-        var dy = (r.top - gap) - fr.bottom;   // 目标：底边 = 原生顶边 - 间距
-        if (Math.abs(dx) <= 0.5 && Math.abs(dy) <= 0.5) break;
-        fab.style.right = (parseFloat(fab.style.right) - dx) + 'px';
-        fab.style.bottom = (parseFloat(fab.style.bottom) - dy) + 'px';
+      // 右下角一个可见悬浮控件都没有：兜底槽位（保持可见，绝不再隐身）
+      if (posSane(lastGoodPos)) { fab.style.bottom = lastGoodPos.bottom; fab.style.right = lastGoodPos.right; }
+      else { fab.style.bottom = '96px'; fab.style.right = '16px'; }
+      if (fab.style.visibility === 'hidden') {
+        fab.style.visibility = 'visible';
+        try { console.log('[TGShare] 右下角没有可见悬浮控件，按兜底位置显示悬浮按钮'); } catch (e2) {}
       }
-      fab.style.visibility = 'visible';
-      lastGoodPos = { bottom: fab.style.bottom, right: fab.style.right };
-      try {
-        console.log('[TGShare] btns=' + btns.length + ' [' + btns.map(function (b) { return (b.el.getAttribute('aria-label') || b.el.getAttribute('data-testid') || '?') + '@' + Math.round(b.r.top); }).join(' ') + '] gap=' + gap + ' posBottom=' + fab.style.bottom + ' posRight=' + fab.style.right + ' size=' + Math.round(fab.offsetWidth) + 'x' + Math.round(fab.offsetHeight));
-      } catch (e) {}
     }
     // 弹窗（大图查看器等）打开时隐藏悬浮按钮，关闭后恢复
     var lastDlg = null;
     checkModal = function () {
       var dlg = hasDialog();
+      if (dlg && fabEl.style.display !== 'none') {
+        try { console.log('[TGShare] 检测到弹窗/大图查看器，隐藏悬浮按钮'); } catch (e2) {}
+      }
       fabEl.style.display = dlg ? 'none' : '';
       if (dlg && panelOpen && cardEl) { cardEl.style.display = 'none'; panelOpen = false; }
       if (!dlg && lastDlg) placeFab();   // 仅在弹窗关闭瞬间重定位
@@ -406,16 +665,12 @@
     };
     // 手动转储：页面控制台执行 document.documentElement.setAttribute('data-tgshare-dump','1') 触发
     function dumpState() {
-      var out = [];
-      var cands = document.querySelectorAll('[data-testid="BackToTopButton"],[aria-label="回到顶部"],[aria-label="Back to top"],[aria-label="Grok"],[data-testid="Grok"],[role="button"]');
-      for (var i = 0; i < cands.length; i++) {
-        var r = cands[i].getBoundingClientRect();
-        if (r.width > 0 && r.height > 0 && r.right > innerWidth * 0.5 && r.top > innerHeight * 0.4) {
-          out.push((cands[i].getAttribute('aria-label') || cands[i].getAttribute('data-testid') || cands[i].tagName) + ' L' + Math.round(r.left) + ' T' + Math.round(r.top) + ' ' + Math.round(r.width) + 'x' + Math.round(r.height));
-        }
-      }
-      console.log('[TGShare-DUMP] ' + out.join(' | '));
-      console.log('[TGShare-DUMP] fab pos: bottom=' + fabEl.style.bottom + ' right=' + fabEl.style.right + ' rect=' + JSON.stringify({ l: Math.round(fabEl.getBoundingClientRect().left), t: Math.round(fabEl.getBoundingClientRect().top), w: Math.round(fabEl.getBoundingClientRect().width), h: Math.round(fabEl.getBoundingClientRect().height) }));
+      var hits = visibleStack();
+      console.log('[TGShare-DUMP] 右下角可见悬浮控件 ' + hits.length + ' 项: ' + hits.map(function (h) {
+        return (h.el.getAttribute('aria-label') || h.el.getAttribute('data-testid') || h.el.tagName) +
+          ' L' + Math.round(h.r.left) + ' T' + Math.round(h.r.top) + ' ' + Math.round(h.r.width) + 'x' + Math.round(h.r.height);
+      }).join(' | '));
+      console.log('[TGShare-DUMP] fab pos: bottom=' + fabEl.style.bottom + ' right=' + fabEl.style.right + ' rect=' + JSON.stringify({ l: Math.round(fabEl.getBoundingClientRect().left), t: Math.round(fabEl.getBoundingClientRect().top), w: Math.round(fabEl.getBoundingClientRect().width), h: Math.round(fabEl.getBoundingClientRect().height) }) + ' 已记忆位置=' + JSON.stringify(savedPos()));
     }
     document.documentElement.addEventListener('click', function (e) {
       if (e.target === document.documentElement && document.documentElement.getAttribute('data-tgshare-dump') === '1') {
@@ -428,19 +683,16 @@
     placeFab();
     // 自愈：每 2 秒静默比对，仅当偏差 >1.5px 时重排（防加载期/滚动条/缩放导致的漂移）
     setInterval(function () {
-      if (hasDialog() || fabEl.style.display === 'none' || fabEl.style.visibility === 'hidden') return;
-      var btns = findNativeBtns();
-      if (!btns.length) return;
-      var r = btns[0].r;
-      var fr = fabEl.getBoundingClientRect();
+      if (hasDialog() || fabEl.style.display === 'none') return;
+      if (savedPos()) return;                                            // 用户定过位置：不自作主张
+      if (fabEl.style.visibility === 'hidden') { placeFab(); return; }   // 兜底：绝不长期隐身
+      var hits = visibleStack();
+      if (!hits.length) return;
+      var r = hits[0].r, fr = fabEl.getBoundingClientRect();
+      var rightEdge = Math.max.apply(null, hits.map(function (h) { return h.r.right; }));
       var gap = 12;
-      if (btns.length > 1) {
-        var g = btns[1].r.top - btns[0].r.bottom;
-        if (g > 0 && g < 80) gap = g;
-      }
-      var dx = (r.left + r.width / 2) - (fr.left + fr.width / 2);
-      var dy = (r.top - gap) - fr.bottom;
-      if (Math.abs(dx) > 1.5 || Math.abs(dy) > 1.5) placeFab();
+      if (hits.length > 1) { var g = hits[1].r.top - hits[0].r.bottom; if (g >= 4 && g <= 40) gap = g; }
+      if (Math.abs(rightEdge - fr.right) > 1.5 || Math.abs((r.top - gap) - fr.bottom) > 1.5) placeFab();
     }, 2000);
     // X 悬浮按钮可能晚于脚本挂载：延迟重试几次，确保站到正确槽位
     [800, 2000, 4000].forEach(function (ms) { setTimeout(function () { if (!hasDialog()) placeFab(); }, ms); });
@@ -474,8 +726,11 @@
           var s = {};
           try { s = JSON.parse(r.text || ''); } catch (e) {}
           var online = !!(s && s.ok);
+          if (online && s.share_mode) CFG.shareMode = s.share_mode;
+          var modeTxt = online ? (SHARE_LABELS[CFG.shareMode] || CFG.shareMode) : '';
           h.innerHTML = '<span class="dot" style="background:' + (online ? '#00ba7c' : '#f4212e') + '"></span>' +
-            '<span>TGShare · ' + (online ? (s.authed === false ? '未登录' : (s.mode === 'bot' ? 'Bot 模式' : '在线')) : '离线') + '</span>';
+            '<span>TGShare · ' + (online ? (s.authed === false ? '未登录' : (s.mode === 'bot' ? 'Bot 模式' : '在线')) : '离线') +
+            (modeTxt ? ' · ' + modeTxt : '') + '</span>';
         })
         .catch(function () { h.innerHTML = '<span class="dot" style="background:#f4212e"></span><span>TGShare · 离线</span>'; });
       if (!CFG.targets.length) {
@@ -485,21 +740,39 @@
         card.appendChild(e);
       }
       CFG.targets.forEach(function (t) {
-        card.appendChild(menuItem(t.label || t.chat, '📮', function () {
-          var l = currentLink();
-          if (l) sendTo(t.chat, t.label || t.chat, l);
-          else toast('✗ 找不到当前推文');
+        var label = (t.label || t.chat) + (t.share_mode ? ' [' + (SHARE_LABELS[t.share_mode] || t.share_mode) + ']' : '');
+        card.appendChild(menuItem(label, '📮', function () {
+          var s = currentShare();
+          if (s) sendTo(t.chat, t.label || t.chat, s.link, s.media, s.text);
         }));
       });
       if (CFG.targets.length > 1) {
         card.appendChild(menuItem('发送到全部 (' + CFG.targets.length + ')', '📤', function () {
-          var l = currentLink();
-          if (!l) { toast('✗ 找不到当前推文'); return; }
-          CFG.targets.forEach(function (t, i) { setTimeout(function () { sendTo(t.chat, t.label || t.chat, l); }, i * 900); });
+          var s = currentShare();
+          if (!s) return;
+          CFG.targets.forEach(function (t, i) {
+            setTimeout(function () { sendTo(t.chat, t.label || t.chat, s.link, s.media, s.text); },
+                       i * (CFG.shareMode === 'link' ? 900 : 1500));
+          });
         }));
       }
       var sep = document.createElement('div'); sep.className = 'sep'; card.appendChild(sep);
-      // 链接域名切换（持久化到 config.json）
+      // 分享形式切换（持久化到 config.json；媒体模式=发图/相册，配文用原版链接）
+      card.appendChild(menuItem('分享形式：' + (SHARE_LABELS[CFG.shareMode] || CFG.shareMode), '🖼', function () {
+        var next = SHARE_MODES[(SHARE_MODES.indexOf(CFG.shareMode) + 1) % SHARE_MODES.length];
+        httpReq('POST', CFG.relay + '/config', { share_mode: next })
+          .then(function (r) {
+            var j = {};
+            try { j = JSON.parse(r.text || ''); } catch (e) {}
+            if (r.status >= 200 && r.status < 300 && j.ok) {
+              CFG.shareMode = j.share_mode;
+              toast('✓ 分享形式：' + (SHARE_LABELS[j.share_mode] || j.share_mode));
+              render();
+            } else toast('✗ 切换失败：' + (j.error || r.status));
+          })
+          .catch(function () { toast('✗ 中继不可达'); });
+      }));
+      // 链接域名切换（持久化到 config.json；仅链接模式生效）
       (function () {
         var names = ['fixupx', 'fixvx', 'fxtwitter', 'vxtwitter'];
         card.appendChild(menuItem('链接域名：' + CFG.service, '🌐', function () {
@@ -517,21 +790,27 @@
             .catch(function () { toast('✗ 中继不可达'); });
         }));
       })();
-      card.appendChild(menuItem('复制当前链接(转换后)', '🔗', function () {
+      card.appendChild(menuItem('复制分享链接', '🔗', function () {
         var l = currentLink();
-        if (l) { copyText(convert(l)); toast('✓ 已复制 ' + CFG.service + ' 链接'); }
+        if (l) { copyText(linkForShare(l)); toast('✓ 已复制 ' + (CFG.shareMode === 'link' ? CFG.service : '原版') + ' 链接'); }
         else toast('✗ 找不到当前推文');
       }));
       card.appendChild(menuItem('t.me 分享对话框', '🌐', function () {
         var l = currentLink();
-        if (l) window.open('https://t.me/share/url?url=' + encodeURIComponent(convert(l)), '_blank');
+        if (l) window.open('https://t.me/share/url?url=' + encodeURIComponent(linkForShare(l)), '_blank');
       }));
       card.appendChild(menuItem('刷新配置', '🔄', function () {
         toast('配置刷新中…');
         loadConfig(function (ok) {
-          toast(ok ? '✓ 配置已更新（' + CFG.targets.length + ' 个目标）' : '✗ 中继不可达');
+          toast(ok ? '✓ 配置已更新（' + CFG.targets.length + ' 个目标 · ' + (SHARE_LABELS[CFG.shareMode] || CFG.shareMode) + '）' : '✗ 中继不可达');
           render();
         });
+      }));
+      card.appendChild(menuItem('重置悬浮按钮位置', '🎯', function () {
+        clearSavedPos();
+        lastGoodPos = null; lastRefEl = null; stackCache = null;
+        placeFab(true);
+        toast('✓ 已恢复自动对齐');
       }));
       var foot = document.createElement('div');
       foot.className = 'foot';
