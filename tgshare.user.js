@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TGShare – X 一键分享到 Telegram
 // @namespace    local.tgshare
-// @version      1.2.0
+// @version      1.2.1
 // @description  X 推文一键分享到 Telegram：仅链接 / 图片 / 原图相册（配文用原版链接）；悬浮按钮可拖动并记住位置
 // @match        https://x.com/*
 // @match        https://twitter.com/*
@@ -16,7 +16,7 @@
 
   // ---------- 兜底配置（会被本机中继 /config.js 覆盖） ----------
   var EMBED = {
-    relay: 'http://127.0.0.1:17887',
+    relay: 'http://127.0.0.1:8787',
     service: 'fixupx',        // fixupx | fixvx | fxtwitter | vxtwitter
     fallback: 'copy',         // 中继不可用时: copy=复制链接 share=打开 t.me 分享 none=不处理
     textTemplate: '{link}',
@@ -241,23 +241,30 @@
   }
 
   // ---------- 配置 ----------
+  // 兜底端口表：config.js 只能从「已经连上的中继」取，所以 EMBED.relay 一旦写错就永远连不上
+  // （1.2.0 曾把 8787 误写成 17887，面板直接恒显「离线」）。这里按候选表依次试，能自愈。
+  var RELAY_CANDIDATES = ['http://127.0.0.1:8787'];
   function loadConfig(cb) {
-    httpReq('GET', CFG.relay + '/config.js')
-      .then(function (r) {
-        var m = (r.text || '').match(/window\.TGShareConfig = (\{[\s\S]*?\});/);
-        if (!m) throw new Error('config.js 解析失败');
-        var c = JSON.parse(m[1]);
-        if (c.targets && c.targets.length) CFG.targets = c.targets;
-        if (c.service) CFG.service = c.service;
-        if (c.fallback) CFG.fallback = c.fallback;
-        if (c.textTemplate) CFG.textTemplate = c.textTemplate;
-        if (c.shareMode) CFG.shareMode = c.shareMode;
-        if (typeof c.officialDomain === 'string') CFG.officialDomain = c.officialDomain;
-        if (c.authToken) CFG.authToken = c.authToken;
-        if (c.relay) CFG.relay = c.relay;
-        if (cb) cb(true);
-      })
-      .catch(function () { if (cb) cb(false); });
+    var urls = [CFG.relay].concat(RELAY_CANDIDATES.filter(function (u) { return u !== CFG.relay; }));
+    (function tryNext(i) {
+      if (i >= urls.length) { if (cb) cb(false); return; }
+      httpReq('GET', urls[i] + '/config.js')
+        .then(function (r) {
+          var m = (r.text || '').match(/window\.TGShareConfig = (\{[\s\S]*?\});/);
+          if (!m) throw new Error('config.js 解析失败');
+          var c = JSON.parse(m[1]);
+          CFG.relay = c.relay || urls[i];
+          if (c.targets && c.targets.length) CFG.targets = c.targets;
+          if (c.service) CFG.service = c.service;
+          if (c.fallback) CFG.fallback = c.fallback;
+          if (c.textTemplate) CFG.textTemplate = c.textTemplate;
+          if (c.shareMode) CFG.shareMode = c.shareMode;
+          if (typeof c.officialDomain === 'string') CFG.officialDomain = c.officialDomain;
+          if (c.authToken) CFG.authToken = c.authToken;
+          if (cb) cb(true);
+        })
+        .catch(function () { tryNext(i + 1); });
+    })(0);
   }
 
   // ---------- 发送 ----------
