@@ -33,6 +33,7 @@
 - [⚙️ 配置](#️-配置)
 - [🎯 使用](#-使用)
 - [🔒 安全设计](#-安全设计)
+- [🛡️ 保活（中继挂了自动拉回）](#️-保活中继挂了自动拉回)
 - [❓ 常见问题](#-常见问题)
 - [📁 项目结构](#-项目结构)
 - [🤖 AIGC 声明](#-aigc-声明)
@@ -54,6 +55,7 @@
 - **原生外观**：悬浮按钮实时克隆 X 原生按钮的绘制参数（背景/边框/尺寸/图标），带 2 秒自愈防漂移；大图/弹窗查看时自动隐藏
 - **低干扰**：观察器仅在新增推文时扫描；请求经 `GM_xmlhttpRequest`（扩展上下文），绕开浏览器对页面访问本机服务的限制
 - **安全默认**：仅监听 127.0.0.1、CORS 仅放行 x.com/twitter.com、`/send` 需令牌 + 目标白名单
+- **挂了能自愈**：配套探活守护（`guard.py` / `guard_loop.py`）——中继无声消失或睡眠唤醒后自动拉回，浏览器端只需重开面板
 
 ## 🧱 架构
 
@@ -177,10 +179,51 @@ cp config.example.json config.json   # Windows: copy config.example.json config.
 - `tgshare.session`（Telethon 会话）等于账号钥匙：勿提交、勿外传、勿放云盘
 - 浏览器端必须用 `GM_xmlhttpRequest` 而非页面 `fetch`：新版 Chromium 的 Local Network Access 限制会拦截页面访问本机服务（详见 FAQ）
 
+## 🛡️ 保活（中继挂了自动拉回）
+
+中继是常驻进程，断网、睡眠唤醒、被安全软件清进程都可能让它**无声消失**（`tgshare.log` 里连崩溃记录都没有）。表现是浏览器面板突然显示「离线」、点分享只能复制链接——此时 `curl http://127.0.0.1:8787/status` 无响应，重启一下就好，但没人想天天手动重启。
+
+探活逻辑只有一份（`guard.py`）：查一次 `/status`，健康就退出；无响应就用 `pythonw` 静默拉起 `server.py`。**探活是幂等的**——反复调用、多个触发器、错过计划都不会拉起第二个中继。两种挂法选一个：
+
+| 方式 | 适用 | 特点 |
+|---|---|---|
+| **`guard_loop.py`** 常驻循环 | 任何平台，**不需要管理员** | 每 60 秒探活一次；睡眠唤醒后第一个节拍就补探活；占 `127.0.0.1:8791` 做单实例锁；日志 `guard_loop.log` 只在「有动作」和每小时心跳时写 |
+| **`guard.py`** + 任务计划 | Windows，需管理员 | 开机 / 登录 / 唤醒 / 每 30 分钟四个触发器各调一次 `guard.py`，不占常驻进程 |
+
+### 常驻循环（推荐先用这个）
+
+```bash
+.venv/Scripts/python.exe guard_loop.py      # 前台试跑；Windows 后台跑用 pythonw.exe
+```
+
+配开机自启：Windows 在启动文件夹（`Win+R` → `shell:startup`）放一个 `tgshare_guard.vbs`，路径换成你的仓库位置：
+
+```vbs
+Set sh = CreateObject("Wscript.Shell")
+q = Chr(34)
+sh.CurrentDirectory = "C:\path\to\tgshare"
+sh.Run q & "C:\path\to\tgshare\.venv\Scripts\pythonw.exe" & q & " " & q & "C:\path\to\tgshare\guard_loop.py" & q, 0, False
+```
+
+> ⚠️ **别手敲三引号转义**：`sh.Run """a.exe"" ""b.py"""` 少一个引号就变成奇数个引号，登录时弹「Windows Script Host · 语句未结束 800A0401」，而守护根本没起来（启动文件夹里的脚本不会有人盯着看）。用上面的 `q = Chr(34)` 拼接最稳；写完先验语法：`cscript //nologo //B tgshare_guard.vbs`（退出码 0 即通过）。
+>
+> Linux / macOS 等效做法：systemd user unit（`Restart=always`，`ExecStart` 指向 `server.py`）或 crontab 每 5 分钟跑一次 `guard.py`。
+
+### 任务计划（Windows，需管理员终端）
+
+```bash
+# 每 30 分钟兜底一次（非提权会话执行 schtasks /Create 会直接被拒；本机实测过）
+schtasks /Create /TN "TGShare-Relay-Guard" /TR "\"%CD%\.venv\Scripts\pythonw.exe\" \"%CD%\guard.py\"" /SC MINUTE /MO 30 /F
+```
+
+想再加「登录 / 睡眠唤醒」触发器就得写任务 XML（`WakeToRun` 命令行给不了，XML 里加 `<LogonTrigger>` + `<WakeToRun>true</WakeToRun>`，用 `schtasks /Create /XML` 注册）。
+
+两种方式可以共存（探活幂等，不会拉起两个中继），但通常选一个就够；切换时记得把另一个的入口停掉。
+
 ## ❓ 常见问题
 
 **Q：面板显示「离线」？**
-中继没起来：`curl http://127.0.0.1:8787/status`。若服务正常仍离线，检查 `config.json` 的 `port` 与脚本内 `EMBED.relay` 是否一致。
+先 `curl http://127.0.0.1:8787/status`。无响应 = 中继真的没跑，重启即可，长期别手动——挂上[保活](#️-保活中继挂了自动拉回)。服务正常仍离线，按顺序查三处：① 面板是打开时取一次状态、**不会自刷新**，中继重启过就重开面板；② 浏览器里装的脚本版本是否与中继分发的 `@version` 一致（Tampermonkey → 已安装脚本）——**只改脚本内容不升 `@version`，Tampermonkey 不会替换已装副本，等于没改**；③ `config.json` 的 `port` 与脚本里 `EMBED.relay` 的端口是否一致（脚本初始配置就从这个端口去取 `/config.js`，端口写错会形成「拉不到配置 → 端口一直错」的死循环）。
 
 **Q：右下角悬浮按钮不见了 / 跑到页面中间了（错位）？**
 按 `F12` 看控制台，脚本会打印诊断：
@@ -234,6 +277,8 @@ tgshare/
 ├── server.py            # 本地中继：aiohttp + Telethon / Bot API，/send /config.js /pick 等（含媒体模式）
 ├── tgshare.user.js      # 油猴用户脚本（浏览器端全部逻辑：按钮、面板、DOM 取图）
 ├── login2.py            # 显式登录脚本（验证码 + 2FA 在本地终端输入）
+├── guard.py             # 探活：/status 无响应就用 pythonw 拉起 server（面向任务计划多触发器）
+├── guard_loop.py        # 常驻探活循环：每 60 秒调一次 guard.py（免管理员，配启动文件夹/自启）
 ├── _test_share_mode.py  # share_mode 纯函数自测（链接转换/媒体候选链/plan_media，不发消息）
 ├── config.example.json  # 配置模板（config.json 不入库）
 ├── requirements.txt
