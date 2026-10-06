@@ -945,7 +945,7 @@ a{{color:#1d9bf0;text-decoration:none}} a:hover{{text-decoration:underline}}
 <p class="badge">当前目标：</p><ul>{target_html}</ul></div>
 
 <div class="step"><h2 style="margin-top:0">③ 使用</h2>
-<p>刷新 X 页面 → 每条推文操作栏最右侧出现 <b>✈ 分享按钮</b>，点击弹出目标列表，一键发送；页面右下角有 <b>TGShare 悬浮按钮</b>（含全部目标、切换分享形式/链接域名、复制链接、t.me 分享、刷新配置）。</p>
+<p>刷新 X 页面 → 每条推文操作栏最右侧出现 <b>✈ 分享按钮</b>，点击弹出目标列表，一键发送；页面右下角有 <b>TGShare 悬浮按钮</b>（含全部目标、切换分享形式/配文/链接域名、复制链接、t.me 分享、刷新配置）。</p>
 <p class="badge">分享形式（current: <b>{share_label}</b>）：<br>
 · <b>仅链接</b>：只发一条链接，链接自动转为 <b>{cfg['service']}</b> 域名（x.com→fixupx.com / fixvx.com；twitter.com→fxtwitter.com / vxtwitter.com），Telegram 自己抓预览图；<br>
 · <b>图片 / 相册 / 拼图</b>：中继把推文图片下载后<b>直接发给你</b>（首图 / 全部原图相册 / 多图拼一张），配文=推文正文 + <b>原版 x.com / twitter.com</b> 链接（模板 <code>caption_template</code>）；正文超长或无图时自动退回「仅链接」。<br>

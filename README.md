@@ -45,7 +45,7 @@
 - **分享形式可切换**（悬浮面板一键循环，写入 `config.json`，也能给单个目标单独指定）：
   - `link` **仅链接**：发送前自动转换 `x.com → fixupx.com`、`twitter.com → fxtwitter.com`（可切 fixvx / vxtwitter），Telegram 内显示完整媒体预览
   - `photo` / `album` / `mosaic` **图片 / 原图相册 / 多图拼图**：中继把推文图片下载后直接发出去（相册≤10 张原图），配文 = 推文正文 + **原版 x.com / twitter.com** 链接；正文超长、无图或下载失败时自动退回「仅链接」，绝不丢消息
-  - `caption_text` **配文开关**（`always` / `never` / `auto`）：`always` = 每个媒体消息都带推文正文（正文一律取 `api.fxtwitter.com`，页面抓不到也补上）；`never` = 不带正文、只留原版链接；`auto` = 页面抓到才带（默认）。单个目标可覆盖
+  - `caption_text` **配文开关**（`always` / `never` / `auto`）：`always` = 每个媒体消息都带推文正文（正文一律取 `api.fxtwitter.com`，页面抓不到也补上）；`never` = 不带正文、只留原版链接；`auto` = 页面抓到才带（默认）。单个目标可覆盖；悬浮面板里的「配文」一项一键循环切换
   - 媒体来源优先 **X 页面 DOM**（浏览器已登录 X，图片 URL 就在眼前，不依赖第三方接口）；视频帖或 DOM 取不到时回退 `api.fxtwitter.com`
 - **两种发送通道**：
   - `userbot`（默认）：Telethon 以自己的 Telegram 账号发送，消息与你手动发的一模一样，可发给**任何**聊天（含机器人）
@@ -163,6 +163,7 @@ cp config.example.json config.json   # Windows: copy config.example.json config.
 | 分享当前推文到某个目标 | 点推文下方 ✈ → 选目标 |
 | 分享视口中央的推文 | 点右下角悬浮 ✈ → 选目标（或「发送到全部」） |
 | 切换分享形式 | 悬浮面板 →「分享形式：仅链接 / 图片 / 相册 / 拼图」循环切换（写入 config.json） |
+| 切换配文 | 悬浮面板 →「配文：抓到才带 / 一定带正文 / 仅链接」循环切换（写入 config.json，媒体模式生效） |
 | 切换链接域名 | 悬浮面板 →「链接域名：fixupx」循环切换（仅链接模式生效） |
 | 复制分享链接 | 任一菜单的「复制分享链接」（媒体模式=原版链接） |
 | 手动分享 | 菜单「t.me 分享对话框」 |

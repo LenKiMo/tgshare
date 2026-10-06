@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         TGShare – X 一键分享到 Telegram
 // @namespace    local.tgshare
-// @version      1.2.2
-// @description  X 推文一键分享到 Telegram：仅链接 / 图片 / 原图相册（配文用原版链接，正文抓取修复）；悬浮按钮可拖动并记住位置
+// @version      1.2.3
+// @description  X 推文一键分享到 Telegram：仅链接 / 图片 / 原图相册（配文可切换：一律带正文 / 仅链接）；悬浮按钮可拖动并记住位置
 // @match        https://x.com/*
 // @match        https://twitter.com/*
 // @run-at       document-idle
@@ -21,13 +21,16 @@
     fallback: 'copy',         // 中继不可用时: copy=复制链接 share=打开 t.me 分享 none=不处理
     textTemplate: '{link}',
     shareMode: 'link',        // link=只发链接 | photo=发首图 | album=发原图相册 | mosaic=多图拼一张
+    captionText: 'auto',      // auto=页面抓到就带正文 | always=一律带（正文取 fxtwitter API）| never=不带正文只留链接
     officialDomain: '',       // 媒体模式强制官方域（空=保留原链接）
     targets: [{ label: '我的收藏', chat: 'me' }],
     authToken: ''
   };
-  var CFG = { relay: EMBED.relay, service: EMBED.service, fallback: EMBED.fallback, textTemplate: EMBED.textTemplate, shareMode: EMBED.shareMode, officialDomain: EMBED.officialDomain, targets: EMBED.targets.slice(), authToken: EMBED.authToken };
+  var CFG = { relay: EMBED.relay, service: EMBED.service, fallback: EMBED.fallback, textTemplate: EMBED.textTemplate, shareMode: EMBED.shareMode, captionText: EMBED.captionText, officialDomain: EMBED.officialDomain, targets: EMBED.targets.slice(), authToken: EMBED.authToken };
   var SHARE_MODES = ['link', 'photo', 'album', 'mosaic'];
   var SHARE_LABELS = { link: '仅链接', photo: '图片', album: '相册', mosaic: '拼图' };
+  var CAPTION_MODES = ['auto', 'always', 'never'];
+  var CAPTION_LABELS = { auto: '抓到才带', always: '一定带正文', never: '仅链接' };
 
   // 幂等：油猴(隔离世界) 与 书签(页面世界) 共享 DOM，用根元素标记防止重复注入
   if (document.documentElement && document.documentElement.getAttribute('data-tgshare-loaded')) return;
@@ -298,6 +301,7 @@
           if (c.fallback) CFG.fallback = c.fallback;
           if (c.textTemplate) CFG.textTemplate = c.textTemplate;
           if (c.shareMode) CFG.shareMode = c.shareMode;
+          if (c.captionText) CFG.captionText = c.captionText;
           if (typeof c.officialDomain === 'string') CFG.officialDomain = c.officialDomain;
           if (c.authToken) CFG.authToken = c.authToken;
           if (cb) cb(true);
@@ -773,7 +777,9 @@
           try { s = JSON.parse(r.text || ''); } catch (e) {}
           var online = !!(s && s.ok);
           if (online && s.share_mode) CFG.shareMode = s.share_mode;
-          var modeTxt = online ? (SHARE_LABELS[CFG.shareMode] || CFG.shareMode) : '';
+          if (online && s.caption_text) CFG.captionText = s.caption_text;
+          var modeTxt = online ? ((SHARE_LABELS[CFG.shareMode] || CFG.shareMode) +
+            (CFG.shareMode === 'link' ? '' : ' · 配文' + (CAPTION_LABELS[CFG.captionText] || CFG.captionText))) : '';
           h.innerHTML = '<span class="dot" style="background:' + (online ? '#00ba7c' : '#f4212e') + '"></span>' +
             '<span>TGShare · ' + (online ? (s.authed === false ? '未登录' : (s.mode === 'bot' ? 'Bot 模式' : '在线')) : '离线') +
             (modeTxt ? ' · ' + modeTxt : '') + '</span>';
@@ -786,7 +792,8 @@
         card.appendChild(e);
       }
       CFG.targets.forEach(function (t) {
-        var label = (t.label || t.chat) + (t.share_mode ? ' [' + (SHARE_LABELS[t.share_mode] || t.share_mode) + ']' : '');
+        var label = (t.label || t.chat) + (t.share_mode ? ' [' + (SHARE_LABELS[t.share_mode] || t.share_mode) + ']' : '') +
+                    (t.caption_text ? ' [配文' + (CAPTION_LABELS[t.caption_text] || t.caption_text) + ']' : '');
         card.appendChild(menuItem(label, '📮', function () {
           var s = currentShare();
           if (s) sendTo(t.chat, t.label || t.chat, s.link, s.media, s.text);
@@ -813,6 +820,21 @@
             if (r.status >= 200 && r.status < 300 && j.ok) {
               CFG.shareMode = j.share_mode;
               toast('✓ 分享形式：' + (SHARE_LABELS[j.share_mode] || j.share_mode));
+              render();
+            } else toast('✗ 切换失败：' + (j.error || r.status));
+          })
+          .catch(function () { toast('✗ 中继不可达'); });
+      }));
+      // 配文开关（持久化到 config.json）：always=每个媒体消息都带推文正文（正文取 fxtwitter API）/ never=只留原版链接 / auto=页面抓到才带
+      card.appendChild(menuItem('配文：' + (CAPTION_LABELS[CFG.captionText] || CFG.captionText), '📝', function () {
+        var next = CAPTION_MODES[(CAPTION_MODES.indexOf(CFG.captionText) + 1) % CAPTION_MODES.length];
+        httpReq('POST', CFG.relay + '/config', { caption_text: next })
+          .then(function (r) {
+            var j = {};
+            try { j = JSON.parse(r.text || ''); } catch (e) {}
+            if (r.status >= 200 && r.status < 300 && j.ok) {
+              CFG.captionText = j.caption_text || next;
+              toast('✓ 配文：' + (CAPTION_LABELS[CFG.captionText] || CFG.captionText));
               render();
             } else toast('✗ 切换失败：' + (j.error || r.status));
           })
@@ -848,7 +870,8 @@
       card.appendChild(menuItem('刷新配置', '🔄', function () {
         toast('配置刷新中…');
         loadConfig(function (ok) {
-          toast(ok ? '✓ 配置已更新（' + CFG.targets.length + ' 个目标 · ' + (SHARE_LABELS[CFG.shareMode] || CFG.shareMode) + '）' : '✗ 中继不可达');
+          toast(ok ? '✓ 配置已更新（' + CFG.targets.length + ' 个目标 · ' + (SHARE_LABELS[CFG.shareMode] || CFG.shareMode) +
+                     (CFG.shareMode === 'link' ? '' : ' · 配文' + (CAPTION_LABELS[CFG.captionText] || CFG.captionText)) + '）' : '✗ 中继不可达');
           render();
         });
       }));
