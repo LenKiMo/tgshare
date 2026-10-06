@@ -17,12 +17,12 @@
 ## 🖼️ 效果预览
 
 <p>
-  <img src="assets/screenshot-button.png" alt="推文操作栏中的 TGShare 分享按钮" width="47%"/>
-  <img src="assets/screenshot-menu.png" alt="点击 ✈ 后弹出的目标菜单" width="47%"/>
+  <img src="assets/demo-menu.png" alt="推文操作栏末端的 ✈ 按钮与点击后弹出的目标菜单" width="47%"/>
+  <img src="assets/demo-panel.png" alt="页面右下角的悬浮按钮与控制面板" width="47%"/>
 </p>
 
-> 左：推文操作栏末端的 ✈ 按钮（克隆原生按钮，样式零违和）；右：点击后弹出的目标菜单。
-> 截图为演示配置（虚构聊天目标），实际目标在 `config.json` 中随时可改。
+> 左：推文操作栏末端的 ✈ 分享按钮（克隆原生按钮，样式零违和），点击后弹出目标聊天菜单；
+> 右：右下角悬浮按钮与控制面板（可一键切分享形式 / 配文 / 链接域名）。示意图。
 
 ## 📑 目录
 
