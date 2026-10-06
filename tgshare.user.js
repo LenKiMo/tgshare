@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         TGShare – X 一键分享到 Telegram
 // @namespace    local.tgshare
-// @version      1.2.1
-// @description  X 推文一键分享到 Telegram：仅链接 / 图片 / 原图相册（配文用原版链接）；悬浮按钮可拖动并记住位置
+// @version      1.2.2
+// @description  X 推文一键分享到 Telegram：仅链接 / 图片 / 原图相册（配文用原版链接，正文抓取修复）；悬浮按钮可拖动并记住位置
 // @match        https://x.com/*
 // @match        https://twitter.com/*
 // @run-at       document-idle
@@ -172,6 +172,21 @@
     return false;
   }
 
+  // 一段内容归属于哪条推文：往上找「最近的带 <time> 的 /status/ 链接」，它的推文 id 就是答案。
+  // 返回 id 字符串；整篇文章里都没有这种链接时返回 null（X 嵌入组件那种扁平布局）。
+  function ownerSid(node, root) {
+    var p = node.parentElement;
+    while (p && p !== root) {
+      var a = p.querySelector('a[href*="/status/"] time');
+      if (a) {
+        var m = ((a.closest('a') || a).getAttribute('href') || '').match(/\/status\/(\d+)/);
+        return m ? m[1] : '';
+      }
+      p = p.parentElement;
+    }
+    return null;
+  }
+
   function mediaOf(article) {
     var out = { photos: [], video: null, poster: null };
     if (!article) return out;
@@ -223,13 +238,37 @@
     return out;
   }
 
-  // 推文正文（媒体模式当配文用）；引用推文自己的正文要排除
-  function tweetTextOf(article) {
+  // 引用卡片：X 把被引推文放在 role=link（旧版带 data-testid=quoteTweet）的容器里，容器内有 tweetText
+  function inQuoteCard(node, root) {
+    var p = node.parentElement;
+    while (p && p !== root) {
+      var tid = p.getAttribute && p.getAttribute('data-testid');
+      var role = p.getAttribute && p.getAttribute('role');
+      var acts = p.querySelector('[data-testid="like"], [data-testid="retweet"], [data-testid="reply"]');
+      // 条动作栏在内 = 整个推文的可点层（主推文），不是引用卡片
+      if ((tid === 'quoteTweet' || role === 'link') && !acts &&
+          p.querySelector('div[data-testid="tweetText"]')) return true;
+      p = p.parentElement;
+    }
+    return false;
+  }
+
+  // 推文正文（媒体模式当配文用）；引用 / 嵌套推文自己的正文要排除。
+  // 旧写法用 nestedIn 一刀切，而主推文自己的表头（含永久链接 time）也在正文祖先里，
+  // 于是主正文被当「嵌套」滤掉 → 永远抓不到正文（媒体模式就退化成只发链接）。
+  // 现在按「归属推文 id」判定：宿主 id === 本文 id 才算本文正文；只剩一条候选时（扁平布局）直接用它。
+  function tweetTextOf(article, link) {
     if (!article) return '';
-    var els = $$('div[data-testid="tweetText"]', article).filter(function (e) {
-      return !nestedIn(e, article);
+    var sid = (String(link || '').match(/\/status\/(\d+)/) || [])[1] || '';
+    var cands = [];
+    $$('div[data-testid="tweetText"]', article).forEach(function (e) {
+      var txt = (e.innerText || '').trim();
+      if (txt && !inQuoteCard(e, article)) cands.push({ text: txt, owner: ownerSid(e, article) });
     });
-    return els.length ? (els[0].innerText || '').trim() : '';
+    for (var i = 0; i < cands.length; i++) {
+      if (!cands[i].owner || !sid || cands[i].owner === sid) return cands[i].text;
+    }
+    return cands.length === 1 ? cands[0].text : '';   // 多条候选且都不归属本文 → 不猜
   }
 
   // 分享用的链接：仅链接模式转镜像域；媒体模式保留原版（可选强制官方域）
@@ -306,7 +345,7 @@
     var l = tweetLink(article) || currentLink();
     if (!l) { toast('✗ 未找到推文链接'); return null; }
     if (CFG.shareMode === 'link') return { link: l, media: null, text: '' };
-    return { link: l, media: mediaOf(article), text: tweetTextOf(article) };
+    return { link: l, media: mediaOf(article), text: tweetTextOf(article, l) };
   }
 
   // 悬浮面板用：视口中央那条推文的链接 + 媒体
@@ -315,7 +354,7 @@
     if (!l) { toast('✗ 找不到当前推文'); return null; }
     var a = currentArticle();
     if (CFG.shareMode === 'link' || !a) return { link: l, media: null, text: '' };
-    return { link: l, media: mediaOf(a), text: tweetTextOf(a) };
+    return { link: l, media: mediaOf(a), text: tweetTextOf(a, l) };
   }
 
   // ---------- 菜单 ----------

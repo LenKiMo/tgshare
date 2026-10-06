@@ -16,6 +16,8 @@
   "official_domain": "",
   "_comment_caption_template": "caption_template(媒体模式配文): {text} = 推文正文, {link} = 原版链接。默认正文在上、链接在下；正文缺失（如纯图无字）时自动退回 text_template",
   "caption_template": "{text}\n\n{link}",
+  "_comment_caption_text": "caption_text(媒体模式配文是否带推文正文): always = 每个媒体消息都带正文（页面没抓到时用 api.fxtwitter.com 补）; never = 不带正文、只留链接; auto = 页面抓到才带（默认）。单个目标可写 caption_text 覆盖",
+  "caption_text": "auto",
   "fallback": "copy",
   "text_template": "{link}",
   "_comment_bots": "bots: 多机器人注册表（token 只存在本机 config.json，不会下发到浏览器）。targets 里 \"bot\": \"别名\" 即用该机器人发送",

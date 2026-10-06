@@ -88,5 +88,24 @@ ck("caption.custom", s.build_caption({"caption_template": "{text} / {link}"}, {}
                                      "https://x.com/u/status/1", "hi"),
    "hi / https://x.com/u/status/1")
 
+# ---- 配文是否带推文正文（caption_text）----
+ck("caption_text.default", s.resolve_caption_text({}), "auto")
+ck("caption_text.always", s.resolve_caption_text({"caption_text": "always"}), "always")
+ck("caption_text.target", s.resolve_caption_text({}, {"caption_text": "NEVER"}), "never")
+ck("caption_text.bool", s.resolve_caption_text({"caption_text": True}), "always")
+ck("caption_text.bool-false", s.resolve_caption_text({"caption_text": "false"}), "never")
+ck("caption_text.bogus", s.resolve_caption_text({"caption_text": "xyz"}), "auto")
+ck("caption_text.target-over-global",
+   s.resolve_caption_text({"caption_text": "never"}, {"caption_text": "always"}), "always")
+ck("caption.never.keeps-link", s.build_caption({"caption_text": "never"}, {}, "https://x.com/u/status/1", "正文"),
+   "https://x.com/u/status/1")
+ck("caption.never.text_template", s.build_caption({"caption_text": "never", "text_template": "📌 {link}"}, {},
+                                                 "https://x.com/u/status/1", "正文"),
+   "📌 https://x.com/u/status/1")
+ck("caption.always.text", s.build_caption({"caption_text": "always"}, {}, "https://x.com/u/status/1", "正文"),
+   "正文\n\nhttps://x.com/u/status/1")
+ck("caption.target-never", s.build_caption({}, {"caption_text": "never"}, "https://x.com/u/status/1", "正文"),
+   "https://x.com/u/status/1")
+
 print("\n" + ("ALL PASS" if not fails else "FAILURES:\n" + "\n".join(fails)))
 raise SystemExit(1 if fails else 0)

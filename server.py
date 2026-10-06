@@ -12,6 +12,8 @@ X/Twitter 一键分享到 Telegram：
   mosaic 发拼图：多图拼成一张 + caption，链接用原版
   媒体来源：优先用页面 DOM 里的图（浏览器已登录 X，无需外部服务）；
            取不到（视频帖/懒加载失败）时回退 api.fxtwitter.com。
+  配文（caption_text）：always=每个媒体消息都带推文正文（正文取 api.fxtwitter.com，
+           页面抓不到也补上）| never=不带正文，只留原版链接 | auto=抓到才带（默认，旧行为）。
 
 用法：
   python server.py --login    # userbot 模式首次登录（交互式：手机号+验证码+2FA）
@@ -48,6 +50,7 @@ DEFAULTS = {
     "fallback": "copy",
     "text_template": "{link}",
     "caption_template": "{text}\n\n{link}",
+    "caption_text": "auto",
     "share_mode": "link",
     "official_domain": "",
     "bots": {},
@@ -82,6 +85,7 @@ def save_config(cfg):
         "_comment_bots": "bots: 多机器人注册表，如 {\"botA\": \"123:token\", \"botB\": \"456:token\"}；targets 里 \"bot\": \"botA\" 即用该机器人发送",
         "_comment_share_mode": "share_mode: link=只发链接(镜像域) | photo=发首图+原版链接 | album=发全部原图相册+原版链接 | mosaic=多图拼成一张+原版链接。单个目标可写 share_mode 覆盖；official_domain 非空(如 \"x.com\")时媒体模式强制用该官方域",
         "_comment_caption_template": "caption_template: 媒体模式（图片/相册/拼图）的配文模板，{text}=推文正文, {link}=原版链接；正文缺失时退回 text_template",
+        "_comment_caption_text": "caption_text: 媒体模式配文是否带推文正文。always=每个媒体消息都带正文（页面没抓到时用 api.fxtwitter.com 补）; never=不带正文只留链接; auto=抓到才带（默认）。单个目标可写 caption_text 覆盖",
         **cfg,
     }
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
@@ -230,6 +234,8 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/130 Safari/537.36")
 SHARE_MODES = ("link", "photo", "album", "mosaic")
 SHARE_LABELS = {"link": "仅链接", "photo": "图片", "album": "相册", "mosaic": "拼图"}
+CAPTION_TEXTS = ("auto", "always", "never")     # 媒体模式配文里的 {text} 从哪来
+CAPTION_LABELS = {"auto": "抓到才带", "always": "一定带正文", "never": "仅链接"}
 MAX_CAPTION = 1024              # 媒体消息 caption 上限（正文更长就退化发链接）
 PHOTO_MAX = 9_500_000          # 单张图片字节上限（Bot API 10MB，留余量）
 VIDEO_MAX = 45 * 1024 * 1024   # 视频上限（Bot API 50MB，留余量）
@@ -273,6 +279,27 @@ def resolve_share_mode(cfg, target=None):
     if m in ("media", "image", "images", "gallery"):     # 别名，宽容处理
         m = "album"
     return m if m in SHARE_MODES else "link"
+
+
+def resolve_caption_text(cfg, target=None):
+    """媒体模式的配文是否带推文正文（{text}）：auto(默认) | always | never。
+
+    always：正文一律取 api.fxtwitter.com（页面抓到的只当 API 失败时的兜底），每个媒体消息都带；
+    never ：不带正文，配文退回 text_template（默认就是原版链接）；
+    auto  ：页面抓到就带、抓不到就只留链接（旧行为）。
+    也接受布尔写法（true/on/1 → always，false/off/0 → never）；单个目标可覆盖。
+    """
+    raw = (target or {}).get("caption_text")
+    if raw is None or raw == "":
+        raw = cfg.get("caption_text")
+    if raw is None or raw == "":
+        raw = "auto"
+    m = str(raw).strip().lower()
+    if m in ("always", "true", "yes", "on", "1", "text"):
+        return "always"
+    if m in ("never", "false", "no", "off", "0", "link", "none"):
+        return "never"
+    return "auto"
 
 
 def convert_link(service, link):
@@ -561,7 +588,9 @@ async def send_media_bot(app, chat, token, kind, items, caption):
 
 
 def build_caption(cfg, target, official, tweet_text=""):
-    """媒体模式的配文：默认「原文 + 原版链接」；没有原文时退回 text_template。"""
+    """媒体模式的配文：默认「原文 + 原版链接」；caption_text=never 或没有原文时退回 text_template。"""
+    if resolve_caption_text(cfg, target) == "never":
+        return build_text(cfg, official, target)
     tt = (tweet_text or "").strip()
     if not tt:
         return build_text(cfg, official, target)
@@ -575,22 +604,34 @@ async def send_media(app, cfg, target, sender, token, chat, link, payload_media,
     任何一步失败都抛异常，由 handle_send 退化为「发链接」，绝不静默丢消息。
     """
     mode = resolve_share_mode(cfg, target)
+    ct = resolve_caption_text(cfg, target)
     force = (target.get("official_domain") or cfg.get("official_domain") or "").strip()
     official = official_link(link, force)
 
+    if ct == "never":
+        tweet_text = ""
+    text_source = "page" if tweet_text else ""
+
     items = dom_media(payload_media)
     source = "dom"
-    if not items or not [m for m in items if m.kind == "photo"]:
+    need_api_media = (not items) or (not [m for m in items if m.kind == "photo"])
+    need_api_text = (ct == "always")                   # always：正文以 API 为准，避免页面抽取差异
+    if need_api_media or need_api_text:
         try:
             api, api_text = await api_media(app, link)
         except Exception as e:                         # noqa: BLE001
             api, api_text = [], ""
             logging.warning("api.fxtwitter.com 解析失败（%s），继续用页面里的媒体", str(e)[:120])
-        if api:
-            items = api
-            source = "api"
-        if not tweet_text:
+        if need_api_media:
+            if api:
+                items = api
+                source = "api"
+            if not tweet_text:
+                tweet_text = api_text
+                text_source = "api" if api_text else ""
+        elif api_text:                                 # always：API 正文优先于页面抓到的
             tweet_text = api_text
+            text_source = "api"
     if not items and isinstance(payload_media, dict) and payload_media.get("poster"):
         # 页面只给得出视频封面时，至少把封面图配上原文发出去
         items = [Media("photo", photo_orig(payload_media["poster"]), "poster.jpg")]
@@ -605,7 +646,8 @@ async def send_media(app, cfg, target, sender, token, chat, link, payload_media,
     kind, picked = plan_media(items, mode, link)
     if not picked:
         raise RuntimeError("没有可发送的媒体")
-    logging.info("media: mode=%s source=%s kind=%s n=%d link=%s", mode, source, kind, len(picked), official)
+    logging.info("media: mode=%s source=%s kind=%s n=%d link=%s caption_text=%s text=%s",
+                 mode, source, kind, len(picked), official, ct, text_source or "-")
     try:
         if sender == "bot":
             r = await send_media_bot(app, chat, token, kind, picked, caption)
@@ -726,6 +768,7 @@ async def handle_config_js(request):
         "textTemplate": cfg.get("text_template", "{link}"),
         "shareMode": resolve_share_mode(cfg),
         "officialDomain": cfg.get("official_domain") or "",
+        "captionText": resolve_caption_text(cfg),
         "targets": cfg.get("targets", []),
         "authToken": cfg["auth_token"],
         "version": 2,
@@ -760,16 +803,25 @@ async def handle_config_update(request):
         if sm not in SHARE_MODES:
             return web.json_response({"ok": False, "error": "share_mode 可选: link/photo/album/mosaic"}, status=400)
         cfg["share_mode"] = sm
+    if "caption_text" in data:
+        ctv = str(data.get("caption_text", "")).strip().lower()
+        ctv = {"true": "always", "on": "always", "1": "always",
+               "false": "never", "off": "never", "0": "never"}.get(ctv, ctv)
+        if ctv not in CAPTION_TEXTS:
+            return web.json_response({"ok": False, "error": "caption_text 可选: auto/always/never"}, status=400)
+        cfg["caption_text"] = ctv
     if "official_domain" in data:
         od = str(data.get("official_domain", "")).strip().lower()
         if od not in OFFICIAL_DOMAINS:
             return web.json_response({"ok": False, "error": "official_domain 可选: 空/x.com/twitter.com"}, status=400)
         cfg["official_domain"] = od
     save_config(cfg)
-    logging.info("config updated: service=%s share_mode=%s", cfg["service"], resolve_share_mode(cfg))
+    logging.info("config updated: service=%s share_mode=%s caption_text=%s",
+                 cfg["service"], resolve_share_mode(cfg), resolve_caption_text(cfg))
     return web.json_response({"ok": True, "service": cfg["service"],
                               "share_mode": resolve_share_mode(cfg),
-                              "official_domain": cfg.get("official_domain") or ""})
+                              "official_domain": cfg.get("official_domain") or "",
+                              "caption_text": resolve_caption_text(cfg)})
 
 
 async def handle_status(request):
@@ -784,6 +836,7 @@ async def handle_status(request):
             "service": cfg.get("service"),
             "share_mode": resolve_share_mode(cfg),
             "official_domain": cfg.get("official_domain") or "",
+            "caption_text": resolve_caption_text(cfg),
             "targets": [t.get("label") for t in cfg.get("targets", [])],
             "version": 2,
         }
@@ -861,6 +914,7 @@ def index_page(cfg):
     cfg_path = str(CONFIG_PATH)
     targets = cfg.get("targets", [])
     share_label = SHARE_LABELS.get(resolve_share_mode(cfg), resolve_share_mode(cfg))
+    caption_label = CAPTION_LABELS.get(resolve_caption_text(cfg), resolve_caption_text(cfg))
     target_html = "".join(
         f'<li><code>{t.get("label")}</code> → <code>{t.get("chat")}</code>'
         + (f' · 形式 <code>{SHARE_LABELS.get(resolve_share_mode(cfg, t), "")}</code>'
@@ -878,7 +932,7 @@ a{{color:#1d9bf0;text-decoration:none}} a:hover{{text-decoration:underline}}
 .mono{{font-family:Consolas,monospace;font-size:12px;word-break:break-all}}
 </style></head><body>
 <h1>TGShare · 本地中继</h1>
-<p class="badge">状态：mode=<b>{cfg['mode']}</b> · service=<b>{cfg['service']}</b> · 分享形式=<b>{share_label}</b> · 端口 <b>{cfg['port']}</b> · 目标 {len(targets)} 个 · 脚本版本 2</p>
+<p class="badge">状态：mode=<b>{cfg['mode']}</b> · service=<b>{cfg['service']}</b> · 分享形式=<b>{share_label}</b> · 配文=<b>{caption_label}</b> · 端口 <b>{cfg['port']}</b> · 目标 {len(targets)} 个 · 脚本版本 2</p>
 
 <div class="step"><h2 style="margin-top:0">① 安装用户脚本（推荐，Brave 已装 Tampermonkey）</h2>
 <p>点击 <a class="btn" href="/tgshare.user.js">安装 TGShare 用户脚本</a>，Tampermonkey 会弹出安装确认。<br>
@@ -895,7 +949,8 @@ a{{color:#1d9bf0;text-decoration:none}} a:hover{{text-decoration:underline}}
 <p class="badge">分享形式（current: <b>{share_label}</b>）：<br>
 · <b>仅链接</b>：只发一条链接，链接自动转为 <b>{cfg['service']}</b> 域名（x.com→fixupx.com / fixvx.com；twitter.com→fxtwitter.com / vxtwitter.com），Telegram 自己抓预览图；<br>
 · <b>图片 / 相册 / 拼图</b>：中继把推文图片下载后<b>直接发给你</b>（首图 / 全部原图相册 / 多图拼一张），配文=推文正文 + <b>原版 x.com / twitter.com</b> 链接（模板 <code>caption_template</code>）；正文超长或无图时自动退回「仅链接」。<br>
-悬浮面板点「分享形式」循环切换并写入 config.json；也可给单个目标写 <code>share_mode</code> 覆盖。<br>
+<b>配文</b>（<code>caption_text</code>，current: <b>{caption_label}</b>）：<code>always</code> = 每个媒体消息都带推文正文（页面没抓到时用 api.fxtwitter.com 补上）；<code>never</code> = 不带正文、只留原版链接；<code>auto</code> = 抓到才带。三种模式下相册都只有第一条消息挂配文（Telegram 相册机制如此）。<br>
+悬浮面板点「分享形式」循环切换并写入 config.json；也可给单个目标写 <code>share_mode</code> / <code>caption_text</code> 覆盖。<br>
 中继不可用时按 config 的 fallback 复制链接或打开 t.me 分享。</p></div>
 
 <p class="badge">服务由 <code>server.py</code> 提供（开机自启）。日志：<code>{LOG_PATH}</code>。改端口/模式后重启服务。</p>

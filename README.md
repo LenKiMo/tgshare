@@ -45,6 +45,7 @@
 - **分享形式可切换**（悬浮面板一键循环，写入 `config.json`，也能给单个目标单独指定）：
   - `link` **仅链接**：发送前自动转换 `x.com → fixupx.com`、`twitter.com → fxtwitter.com`（可切 fixvx / vxtwitter），Telegram 内显示完整媒体预览
   - `photo` / `album` / `mosaic` **图片 / 原图相册 / 多图拼图**：中继把推文图片下载后直接发出去（相册≤10 张原图），配文 = 推文正文 + **原版 x.com / twitter.com** 链接；正文超长、无图或下载失败时自动退回「仅链接」，绝不丢消息
+  - `caption_text` **配文开关**（`always` / `never` / `auto`）：`always` = 每个媒体消息都带推文正文（正文一律取 `api.fxtwitter.com`，页面抓不到也补上）；`never` = 不带正文、只留原版链接；`auto` = 页面抓到才带（默认）。单个目标可覆盖
   - 媒体来源优先 **X 页面 DOM**（浏览器已登录 X，图片 URL 就在眼前，不依赖第三方接口）；视频帖或 DOM 取不到时回退 `api.fxtwitter.com`
 - **两种发送通道**：
   - `userbot`（默认）：Telethon 以自己的 Telegram 账号发送，消息与你手动发的一模一样，可发给**任何**聊天（含机器人）
@@ -129,6 +130,7 @@ cp config.example.json config.json   # Windows: copy config.example.json config.
   "share_mode": "link",         // 分享形式（面板可切换）：link=只发链接 | photo=发首图 | album=发原图相册 | mosaic=多图拼一张
   "official_domain": "",        // 媒体模式的链接：留空=用页面上的原版链接；填 "x.com" 强制统一官方域
   "caption_template": "{text}\n\n{link}",   // 媒体模式配文：{text}=推文正文, {link}=原版链接（无正文时退回 text_template）
+  "caption_text": "auto",                  // 媒体模式配文是否带正文：always=一律带（正文取 fxtwitter API）| never=不带、只留链接 | auto=页面抓到才带
   "fallback": "copy",           // 中继不可达时：copy=复制链接 | share=打开 t.me 分享
   "text_template": "{link}",    // 仅链接模式的模板，可加前缀如 "📌 {link}"
   "bots": {                     // 多机器人注册表（token 只存本机，不下发浏览器）
@@ -147,7 +149,7 @@ cp config.example.json config.json   # Windows: copy config.example.json config.
 }
 ```
 
-**身份规则**：目标的 `mode` / `bot` 字段覆盖全局 `mode`（写了 `bot` 别名即隐含 bot 模式）；**分享形式规则**同理，目标的 `share_mode` 覆盖全局。发送权限提醒：**频道**里机器人必须是**管理员**才能发消息；**普通群组**机器人作为普通成员即可发言（除非群开启"仅管理员可发言"）；`chat: "me"` 需要你先给该机器人发一条消息（用于解析你的私聊 id）。
+**身份规则**：目标的 `mode` / `bot` 字段覆盖全局 `mode`（写了 `bot` 别名即隐含 bot 模式）；**分享形式规则**同理，目标的 `share_mode` / `caption_text` 覆盖全局。发送权限提醒：**频道**里机器人必须是**管理员**才能发消息；**普通群组**机器人作为普通成员即可发言（除非群开启"仅管理员可发言"）；`chat: "me"` 需要你先给该机器人发一条消息（用于解析你的私聊 id）。
 
 > 媒体模式发图时链接是**原版** `x.com` / `twitter.com`（不是镜像域）；如果图片发不出去（无图/正文超 1024 字/下载失败），会自动退回「仅链接」并把原因写进响应与日志。
 > `auth_token` 留空会自动生成（浏览器脚本通过 `/config.js` 获取，用于 `/send` 鉴权）。
@@ -167,7 +169,7 @@ cp config.example.json config.json   # Windows: copy config.example.json config.
 
 链接转换规则：`x.com → fixupx.com`（或 fixvx.com），`twitter.com → fxtwitter.com`（或 vxtwitter.com）——只在「仅链接」模式下生效；媒体模式的配文一律用页面上的**原版**链接（可用 `official_domain` 强制 `x.com`）。
 
-**媒体模式怎么取图**：油猴脚本从推文 DOM 里按「媒体链接自带 `/status/<推文id>/photo/N`」定位图片（引用推文里的图 id 不同，天然被排除，不会被误发），拼图交给 `mosaic.fxtwitter.com`；中继把页面上的缩略图地址（`?format=webp&name=large`）重写成原图（`?format=jpg&name=orig`）下载后上传。视频帖取 `api.fxtwitter.com` 的 mp4（>45MB 则退回首帧封面）。发相册时 Telegram 只有第一条消息带配文，这是相册机制本身如此。
+**媒体模式怎么取图**：油猴脚本从推文 DOM 里按「媒体链接自带 `/status/<推文id>/photo/N`」定位图片（引用推文里的图 id 不同，天然被排除，不会被误发），拼图交给 `mosaic.fxtwitter.com`；中继把页面上的缩略图地址（`?format=webp&name=large`）重写成原图（`?format=jpg&name=orig`）下载后上传。视频帖取 `api.fxtwitter.com` 的 mp4（>45MB 则退回首帧封面）。发相册时 Telegram 只有第一条消息带配文，这是相册机制本身如此。配文里的正文按「归属推文 id」判定：引用推文（翻译帖很常见）里被引原文的正文与图都会被排除。
 
 ## 🔒 安全设计
 
@@ -263,6 +265,10 @@ userbot 模式需要自己的 `api_id/api_hash`——用仓库内置的公共凭
 
 **Q：媒体模式发的图比 X 页面上看到的还清楚？**
 正常。页面上的图是缩略图（`?format=webp&name=large`），中继会重写成原图（`?format=jpg&name=orig`）再上传；Telegram 侧会把图片压到最长边 2560、单张 ≤10MB。原图超过 9.5MB 时自动退到 2048px 版本；视频 >45MB 时只发首帧封面。
+
+**Q：为什么有时候配文带推文正文、有时候只有链接？**
+媒体模式配文里的正文（`caption_template` 的 `{text}`）只有两个来源：**X 页面 DOM**（油猴脚本抓推文正文）和 **`api.fxtwitter.com`**（回退路线，只在页面里的图不够用时才走，例如视频/GIF 帖）。1.2.2 之前页面正文的判定写反了——主推文自己的表头里也有永久链接 `<time>`，被当成「引用推文里的内容」整段滤掉，于是**只有走 API 的视频帖才带正文，图片/相册帖一律只有链接**，这就是「偶尔带、多半不带」的根因。
+想让行为统一，把 `caption_text` 设成 **`always`**（一律带正文，权威来源是 API，引用/翻译帖取的都是主推文那一段）或 **`never`**（一律只留链接）。日志 `media:` 行会记 `caption_text=` 与 `text=page|api|-`，可确认正文实际来源。
 
 **Q：为什么媒体模式有时还是发了链接？**
 三种情况会自动退回「仅链接」：推文没有图（纯文字/纯转推/已删除）、正文超过 1024 字（Telegram 图片配文上限）、图片下载或上传失败。响应里的 `media_error` 与 `tgshare.log` 都写了原因，消息本身不会丢。
